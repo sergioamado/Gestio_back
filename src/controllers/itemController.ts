@@ -26,6 +26,13 @@ export const getAllItems = async (req: Request, res: Response) => {
       where: {
         unidade_id: unidadeId ? Number(unidadeId) : undefined,
       },
+      include: {
+        unidades_organizacionais: {
+          select: {
+            nome: true,
+          },
+        },
+      },
       orderBy: { descricao: 'asc' },
     });
     res.json(items);

@@ -6,7 +6,6 @@ import bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
 
-// Nenhum erro aqui, mas mantemos para consistência
 const usuarioSchema = z.object({
   username: z.string().min(3),
   nome_completo: z.string().min(3),
@@ -17,7 +16,6 @@ const usuarioSchema = z.object({
   password: z.string().min(6, "A senha deve ter no mínimo 6 caracteres"),
 });
 
-
 export const getAllUsers = async (req: Request, res: Response) => {
   try {
     const users = await prisma.usuarios.findMany({
@@ -27,13 +25,11 @@ export const getAllUsers = async (req: Request, res: Response) => {
         username: true,
         nome_completo: true,
         role: true,
+        telefone: true,
+        email: true,
         unidade_id: true,
-        telefone: true, // <-- CORREÇÃO: Esta linha estava em falta
-        email: true,    // <-- CORREÇÃO: Esta linha estava em falta
         unidades_organizacionais: {
-          select: {
-            nome: true
-          }
+          select: { nome: true }
         }
       }
     });
@@ -44,12 +40,8 @@ export const getAllUsers = async (req: Request, res: Response) => {
   }
 };
 
-// As restantes funções do ficheiro podem permanecer como estão.
-// Colei-as abaixo para garantir que tem o ficheiro completo e correto.
-
 export const createUser = async (req: Request, res: Response) => {
   try {
-    // Garantir que campos opcionais vazios sejam guardados como nulos
     const body = { ...req.body, telefone: req.body.telefone || null, email: req.body.email || null };
     const { password, ...data } = usuarioSchema.parse(body);
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -62,10 +54,15 @@ export const createUser = async (req: Request, res: Response) => {
     });
     const { hashed_password, ...userResponse } = newUser;
     res.status(201).json(userResponse);
-  } catch (error) {
-    res.status(400).json({ message: 'Dados inválidos ou utilizador já existe.', details: error });
+  } catch (error: any) {
+    let errorMessage = 'Dados inválidos ou utilizador já existe.';
+    if (error.code === 'P2002') { // Código de erro do Prisma para violação de constraint única
+      errorMessage = `O valor para '${error.meta.target}' já está em uso.`;
+    }
+    res.status(400).json({ message: errorMessage });
   }
 };
+
 
 const updateUserSchema = z.object({
   nome_completo: z.string().min(3),

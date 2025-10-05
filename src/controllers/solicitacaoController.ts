@@ -125,14 +125,13 @@ export const updateStatusSolicitacao = async (req: Request, res: Response) => {
 };
 
 export const getLatestSolicitacoes = async (req: Request, res: Response) => {
-    const { id: userId, role, unidade_id } = req.user!; // Pega dados do token
-    
+    const { id: userId, role, unidade_id } = req.user!;
+
     try {
-        let whereClause = {};
+        let whereClause: any = {};
         if (role === 'gerente') {
             whereClause = { unidade_id: unidade_id };
         } else if (role === 'tecnico') {
-            // No schema original, o técnico é o responsável
             whereClause = { responsavel_usuario_id: userId };
         }
 
@@ -141,20 +140,23 @@ export const getLatestSolicitacoes = async (req: Request, res: Response) => {
             take: 5,
             orderBy: { data_solicitacao: 'desc' },
             include: {
-                usuarios_solicitacoes_responsavel_usuario_idTousuarios: { select: { nome_completo: true } },
+                usuarios_solicitacoes_responsavel_usuario_idTousuarios: { 
+                    select: { nome_completo: true } 
+                },
             }
         });
 
-        const response = solicitacoes.map((s: { id: any; data_solicitacao: any; status: any; usuarios_solicitacoes_responsavel_usuario_idTousuarios: { nome_completo: any; }; }) => ({
+        const response = solicitacoes.map((s) => ({
             id: s.id,
             data_solicitacao: s.data_solicitacao,
             status: s.status,
-            tecnico_responsavel: s.usuarios_solicitacoes_responsavel_usuario_idTousuarios.nome_completo,
+            tecnico_responsavel: s.usuarios_solicitacoes_responsavel_usuario_idTousuarios?.nome_completo || 'Técnico não encontrado',
         }));
 
         res.json(response);
 
     } catch (error) {
+        console.error("Erro ao buscar últimas solicitações:", error);
         res.status(500).json({ message: 'Erro ao buscar últimas solicitações.' });
     }
 };
