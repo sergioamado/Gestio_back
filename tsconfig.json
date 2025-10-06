@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    /* --- Configurações Básicas --- */
+    "target": "ES2020",                       /* Define a versão do JavaScript que será gerada no final. ES2020 é uma ótima escolha para Node.js moderno. */
+    "module": "commonjs",                     /* Define o sistema de módulos. 'commonjs' é o padrão para Node.js (usando require/module.exports). */
+    "rootDir": "./src",                       /* Especifica a pasta raiz onde está seu código TypeScript. */
+    "outDir": "./dist",                       /* Especifica a pasta onde o código JavaScript compilado será salvo. */
+    "sourceMap": true,                        /* Gera arquivos .map que ajudam a depurar o código, mostrando o .ts original no debugger. */
+    
+    /* --- Interoperabilidade de Módulos --- */
+    "esModuleInterop": true,                  /* ESSENCIAL: Esta é a linha que resolve o erro que você teve com o 'cors'. Permite importar módulos CommonJS de forma mais simples. */
+    
+    /* --- Verificação de Tipos (Rigor) --- */
+    "strict": true,                           /* Habilita todas as checagens de tipo mais rigorosas. É ALTAMENTE recomendado para evitar bugs. */
+    "skipLibCheck": true,                     /* Pula a verificação de tipos de todos os arquivos de declaração (.d.ts) de bibliotecas em node_modules. Acelera a compilação. */
+    
+    /* --- Outras Opções --- */
+    "forceConsistentCasingInFileNames": true, /* Garante que as importações de arquivos respeitem maiúsculas e minúsculas, evitando bugs entre Windows e Linux. */
+    "resolveJsonModule": true                 /* Permite importar arquivos .json diretamente no seu código. */
+  },
+  "include": ["src/**/*"],                    /* Diz ao TypeScript para incluir todos os arquivos dentro da pasta 'src'. */
+  "exclude": ["node_modules"]                 /* Diz ao TypeScript para ignorar a pasta 'node_modules'. */
+}
