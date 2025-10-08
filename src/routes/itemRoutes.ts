@@ -1,7 +1,7 @@
 // src/routes/itemRoutes.ts
 import { Router } from 'express';
 import { getAllItems, createItem, updateItem, deleteItem } from '../controllers/itemController';
-import { authMiddleware } from '../middlewares/authMiddleware';
+import { authMiddleware, managerOrAdminMiddleware } from '../middlewares/authMiddleware';
 
 const router = Router();
 
@@ -9,8 +9,8 @@ const router = Router();
 router.use(authMiddleware);
 
 router.get('/', getAllItems);
-router.post('/', createItem);
-router.put('/:id', updateItem);
-router.delete('/:id', deleteItem);
+router.post('/', managerOrAdminMiddleware, createItem);
+router.put('/:id',managerOrAdminMiddleware, updateItem);
+router.delete('/:id',managerOrAdminMiddleware, deleteItem);
 
 export default router;

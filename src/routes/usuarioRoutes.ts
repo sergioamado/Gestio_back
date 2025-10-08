@@ -5,12 +5,12 @@ import { authMiddleware, adminOnlyMiddleware } from '../middlewares/authMiddlewa
 
 const router = Router();
 
-router.use(authMiddleware, adminOnlyMiddleware);
+router.use(authMiddleware);
 
 router.get('/', getAllUsers);
-router.post('/', createUser);
-router.delete('/:id', deleteUser);
-router.put('/:id', updateUser);
-router.put('/reset-password', resetPasswordByAdmin);
+router.post('/', adminOnlyMiddleware, createUser);
+router.delete('/:id', adminOnlyMiddleware, deleteUser);
+router.put('/:id', adminOnlyMiddleware, updateUser);
+router.put('/reset-password', adminOnlyMiddleware, resetPasswordByAdmin);
 
 export default router;

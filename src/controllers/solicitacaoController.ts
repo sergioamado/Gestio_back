@@ -17,19 +17,28 @@ const solicitacaoSchema = z.object({
   })).min(1, "A solicitação deve ter pelo menos um item."),
 });
 
-// Listar solicitações com filtros
 export const getAllSolicitacoes = async (req: Request, res: Response) => {
-  const { unidade_id, status, tecnico_id_filtro } = req.query;
+  const { unidade_id, status, tecnico_id_filtro, id_filtro } = req.query;
   const where: any = {};
 
   if (unidade_id) where.unidade_id = Number(unidade_id);
   if (status) where.status = String(status);
   if (tecnico_id_filtro) where.responsavel_usuario_id = Number(tecnico_id_filtro);
+  if (id_filtro) where.id = Number(id_filtro);
 
   const solicitacoes = await prisma.solicitacoes.findMany({
     where,
     include: {
-        usuarios_solicitacoes_responsavel_usuario_idTousuarios: { select: { nome_completo: true } }
+        responsavel: { select: { nome_completo: true } },
+        solicitacao_itens: {
+          include: {
+            itens: {
+              select: {
+                descricao: true,
+              }
+            }
+          }
+        }
     },
     orderBy: { data_solicitacao: 'desc' }
   });
@@ -87,8 +96,8 @@ export const getSolicitacaoById = async (req: Request, res: Response) => {
       where: { id: Number(id) },
       include: {
         // Inclui dados do solicitante, do responsável e os itens da solicitação
-        usuarios_solicitacoes_usuario_idTousuarios: { select: { nome_completo: true } },
-        usuarios_solicitacoes_responsavel_usuario_idTousuarios: { select: { nome_completo: true } },
+        solicitante: { select: { nome_completo: true } },
+        responsavel: { select: { nome_completo: true } },
         solicitacao_itens: {
           include: {
             itens: true, // Inclui todos os dados do item
@@ -125,10 +134,10 @@ export const updateStatusSolicitacao = async (req: Request, res: Response) => {
 };
 
 export const getLatestSolicitacoes = async (req: Request, res: Response) => {
-    const { id: userId, role, unidade_id } = req.user!;
-
+    const { id: userId, role, unidade_id } = req.user!; // Pega dados do token
+    
     try {
-        let whereClause: any = {};
+        let whereClause = {};
         if (role === 'gerente') {
             whereClause = { unidade_id: unidade_id };
         } else if (role === 'tecnico') {
@@ -137,26 +146,26 @@ export const getLatestSolicitacoes = async (req: Request, res: Response) => {
 
         const solicitacoes = await prisma.solicitacoes.findMany({
             where: whereClause,
-            take: 5,
+            take: 15,
             orderBy: { data_solicitacao: 'desc' },
             include: {
-                usuarios_solicitacoes_responsavel_usuario_idTousuarios: { 
-                    select: { nome_completo: true } 
-                },
+                responsavel: { select: { nome_completo: true } },
             }
         });
 
+        // CORRIGIDO: Adicionado optional chaining (?.) para evitar erro se 'responsavel' for nulo
         const response = solicitacoes.map((s) => ({
             id: s.id,
             data_solicitacao: s.data_solicitacao,
             status: s.status,
-            tecnico_responsavel: s.usuarios_solicitacoes_responsavel_usuario_idTousuarios?.nome_completo || 'Técnico não encontrado',
+            tecnico_responsavel: s.responsavel?.nome_completo || 'Não definido',
+            numero_glpi: s.numero_glpi
         }));
 
         res.json(response);
 
     } catch (error) {
-        console.error("Erro ao buscar últimas solicitações:", error);
+        console.error("Erro em getLatestSolicitacoes:", error); // Adicionado para log detalhado
         res.status(500).json({ message: 'Erro ao buscar últimas solicitações.' });
     }
 };
@@ -170,7 +179,6 @@ export const updateSolicitacaoItemStatus = async (req: Request, res: Response) =
             where: { id: Number(itemId) },
             data: { 
                 status_entrega,
-                // Se o status for 'Entregue', registra a data/hora atual
                 data_entrega: status_entrega === 'Entregue' ? new Date() : null
             },
         });

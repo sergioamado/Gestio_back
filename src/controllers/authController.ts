@@ -58,6 +58,9 @@ export const login = async (req: Request, res: Response) => {
         id: user.id,
         nome_completo: user.nome_completo,
         role: user.role,
+        unidade_id: user.unidade_id, 
+        email: user.email,           
+        telefone: user.telefone 
       },
     });
   } catch (error) {

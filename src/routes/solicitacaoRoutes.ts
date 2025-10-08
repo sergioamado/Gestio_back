@@ -10,9 +10,12 @@ router.use(authMiddleware);
 
 router.get('/', getAllSolicitacoes);
 router.post('/', createSolicitacao);
+
+// CORRIGIDO: Rota específica '/latest' movida para ANTES da rota genérica '/:id'
+router.get('/latest', getLatestSolicitacoes);
+
 router.get('/:id', getSolicitacaoById);
 router.patch('/:id/status', updateStatusSolicitacao); 
-router.get('/latest', getLatestSolicitacoes);
 router.patch('/item/:itemId/status', updateSolicitacaoItemStatus);
 
 export default router;
