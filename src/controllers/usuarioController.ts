@@ -9,7 +9,7 @@ const prisma = new PrismaClient();
 const usuarioSchema = z.object({
   username: z.string().min(3),
   nome_completo: z.string().min(3),
-  role: z.enum(['admin', 'gerente', 'tecnico']),
+  role: z.enum(['admin', 'gerente', 'tecnico', 'tecnico_impressora', 'tecnico_eletronica']),
   telefone: z.string().optional(),
   email: z.string().email().optional(),
   unidade_id: z.number().int().nullable(),
@@ -17,11 +17,15 @@ const usuarioSchema = z.object({
 });
 
 export const getAllUsers = async (req: Request, res: Response) => {
-  const { role, unidade_id } = req.query;
+  const { role, unidade_id, role_type } = req.query;
 
   const where: any = {};
 
-  if (role) {
+  if (role_type === 'tecnico') {
+    where.role = {
+      in: ['tecnico', 'tecnico_impressora', 'tecnico_eletronica']
+    };
+  } else if (role) {
     where.role = String(role);
   }
 
@@ -32,14 +36,13 @@ export const getAllUsers = async (req: Request, res: Response) => {
   const users = await prisma.usuarios.findMany({
     where,
     orderBy: { nome_completo: 'asc' },
-    // Selecionamos os campos para não expor a senha
     select: {
       id: true,
       username: true,
       nome_completo: true,
       role: true,
       unidade_id: true,
-      unidades_organizacionais: { // Incluindo o nome da unidade relacionada
+      unidades_organizacionais: {
         select: {
           nome: true
         }
@@ -70,7 +73,7 @@ export const createUser = async (req: Request, res: Response) => {
 
 const updateUserSchema = z.object({
   nome_completo: z.string().min(3),
-  role: z.enum(['admin', 'gerente', 'tecnico']),
+  role: z.enum(['admin', 'gerente', 'tecnico', 'tecnico_impressora', 'tecnico_eletronica']),
   telefone: z.string().optional(),
   email: z.string().email().optional(),
   unidade_id: z.number().int().nullable(),

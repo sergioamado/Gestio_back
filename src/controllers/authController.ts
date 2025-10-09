@@ -23,12 +23,9 @@ export const login = async (req: Request, res: Response) => {
 
     let passwordIsValid = false;
 
-    // Lógica de migração de senha
     if (user.hashed_password.startsWith('$argon2')) {
-      // Senha antiga (Argon2), verifica e migra
       if (await argon2.verify(user.hashed_password, password)) {
         passwordIsValid = true;
-        // A senha está correta, vamos gerar um novo hash com bcrypt e atualizar no banco
         const newHashedPassword = await bcrypt.hash(password, 10);
         await prisma.usuarios.update({
           where: { id: user.id },
@@ -36,7 +33,6 @@ export const login = async (req: Request, res: Response) => {
         });
       }
     } else {
-      // Senha já migrada (Bcrypt)
       passwordIsValid = await bcrypt.compare(password, user.hashed_password);
     }
 
@@ -44,24 +40,19 @@ export const login = async (req: Request, res: Response) => {
       return res.status(401).json({ message: 'Credenciais inválidas.' });
     }
 
-    // Gerar o Token JWT
     const token = jwt.sign(
       { id: user.id, role: user.role, unidade_id: user.unidade_id },
       process.env.JWT_SECRET as string,
-      { expiresIn: '8h' } // Token expira em 8 horas
+      { expiresIn: '8h' }
     );
+
+    // CORRIGIDO: Retornar o objeto de utilizador completo, excluindo apenas a senha
+    const { hashed_password, ...userResponse } = user;
 
     res.json({
       message: 'Login bem-sucedido!',
       token,
-      user: {
-        id: user.id,
-        nome_completo: user.nome_completo,
-        role: user.role,
-        unidade_id: user.unidade_id, 
-        email: user.email,           
-        telefone: user.telefone 
-      },
+      user: userResponse,
     });
   } catch (error) {
     console.error(error);
@@ -77,7 +68,7 @@ export const adminOnlyMiddleware = (req: Request, res: Response, next: NextFunct
 };
 
 export const changePassword = async (req: Request, res: Response) => {
-  const userId = req.user!.id; // Pega o ID do usuário logado pelo token
+  const userId = req.user!.id;
   const { currentPassword, newPassword } = req.body;
 
   if (!currentPassword || !newPassword || newPassword.length < 6) {
@@ -87,10 +78,9 @@ export const changePassword = async (req: Request, res: Response) => {
   try {
     const user = await prisma.usuarios.findUnique({ where: { id: userId } });
     if (!user) {
-      return res.status(404).json({ message: 'Usuário не encontrado.' });
+      return res.status(404).json({ message: 'Usuário não encontrado.' });
     }
 
-    // A senha do usuário já deve estar em bcrypt neste ponto
     const passwordIsValid = await bcrypt.compare(currentPassword, user.hashed_password);
     if (!passwordIsValid) {
       return res.status(401).json({ message: 'A senha atual está incorreta.' });

@@ -7,6 +7,14 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum Role {
+  admin
+  gerente
+  tecnico
+  tecnico_impressora
+  tecnico_eletronica
+}
+
 model itens {
   id                       Int                      @id @default(autoincrement())
   codigo_sipac             String?                  @db.VarChar(50)

@@ -1,8 +1,6 @@
 // src/middlewares/authMiddleware.ts
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-
-// Estendendo a interface Request do Express para adicionar nossa propriedade 'user'
 declare global {
   namespace Express {
     interface Request {
@@ -44,6 +42,13 @@ export const adminOnlyMiddleware = (req: Request, res: Response, next: NextFunct
 export const managerOrAdminMiddleware = (req: Request, res: Response, next: NextFunction) => {
   if (req.user?.role !== 'admin' && req.user?.role !== 'gerente') {
     return res.status(403).json({ message: 'Acesso negado. Requer perfil de gerente ou administrador.' });
+  }
+  next();
+};
+
+export const blockManagerMiddleware = (req: Request, res: Response, next: NextFunction) => {
+  if (req.user?.role === 'gerente') {
+    return res.status(403).json({ message: 'Acesso negado. Perfil de gerente não pode executar esta ação.' });
   }
   next();
 };

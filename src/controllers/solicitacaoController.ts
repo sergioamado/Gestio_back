@@ -95,12 +95,11 @@ export const getSolicitacaoById = async (req: Request, res: Response) => {
     const solicitacao = await prisma.solicitacoes.findUnique({
       where: { id: Number(id) },
       include: {
-        // Inclui dados do solicitante, do responsável e os itens da solicitação
         solicitante: { select: { nome_completo: true } },
         responsavel: { select: { nome_completo: true } },
         solicitacao_itens: {
           include: {
-            itens: true, // Inclui todos os dados do item
+            itens: true,
           }
         }
       }
@@ -133,27 +132,31 @@ export const updateStatusSolicitacao = async (req: Request, res: Response) => {
     }
 };
 
-export const getLatestSolicitacoes = async (req: Request, res: Response) => {
-    const { id: userId, role, unidade_id } = req.user!; // Pega dados do token
+
+ export const getLatestSolicitacoes = async (req: Request, res: Response) => {
+    const { id: userId, role, unidade_id } = req.user!; 
     
     try {
-        let whereClause = {};
+        let whereClause: any = {};
+        
         if (role === 'gerente') {
-            whereClause = { unidade_id: unidade_id };
-        } else if (role === 'tecnico') {
+            whereClause = { 
+                unidade_id: unidade_id,
+                status: 'Pendente' 
+            };
+        } 
+        else if (role.startsWith('tecnico')) {
             whereClause = { responsavel_usuario_id: userId };
         }
 
         const solicitacoes = await prisma.solicitacoes.findMany({
             where: whereClause,
-            take: 15,
             orderBy: { data_solicitacao: 'desc' },
             include: {
                 responsavel: { select: { nome_completo: true } },
             }
         });
 
-        // CORRIGIDO: Adicionado optional chaining (?.) para evitar erro se 'responsavel' for nulo
         const response = solicitacoes.map((s) => ({
             id: s.id,
             data_solicitacao: s.data_solicitacao,
@@ -165,10 +168,12 @@ export const getLatestSolicitacoes = async (req: Request, res: Response) => {
         res.json(response);
 
     } catch (error) {
-        console.error("Erro em getLatestSolicitacoes:", error); // Adicionado para log detalhado
+        console.error("Erro em getLatestSolicitacoes:", error);
         res.status(500).json({ message: 'Erro ao buscar últimas solicitações.' });
     }
 };
+
+
 
 export const updateSolicitacaoItemStatus = async (req: Request, res: Response) => {
     const { itemId } = req.params; // ID do 'solicitacao_itens'
