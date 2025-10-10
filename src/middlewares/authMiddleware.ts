@@ -52,3 +52,10 @@ export const blockManagerMiddleware = (req: Request, res: Response, next: NextFu
   }
   next();
 };
+
+export const eletronicaOuAdminMiddleware = (req: Request, res: Response, next: NextFunction) => {
+  if (req.user?.role !== 'admin' && req.user?.role !== 'tecnico_eletronica') {
+    return res.status(403).json({ message: 'Acesso negado. Requer perfil de Administrador ou Técnico de Eletrônica.' });
+  }
+  next();
+};

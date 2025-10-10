@@ -15,6 +15,12 @@ enum Role {
   tecnico_eletronica
 }
 
+enum StatusManutencao {
+  Pendente
+  Em_manutencao
+  Concluido
+}
+
 model itens {
   id                       Int                      @id @default(autoincrement())
   codigo_sipac             String?                  @db.VarChar(50)
@@ -94,4 +100,17 @@ model usuarios {
   solicitacoes_criadas        solicitacoes[]            @relation("SolicitacoesDoUsuario")
   solicitacoes_responsaveis   solicitacoes[]            @relation("SolicitacoesDoResponsavel")
   unidades_organizacionais    unidades_organizacionais? @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  manutencoes_eletronicas     manutencao_eletronica[]   @relation("ManutencoesDoTecnico")
+}
+
+model manutencao_eletronica {
+  id                     Int              @id @default(autoincrement())
+  glpi                   String?          @db.VarChar(50)
+  tecnico_responsavel_id Int
+  equipamento            String           @db.VarChar(255)
+  descricao_problema     String           @db.Text // Especificando o tipo TEXT
+  laudo_tecnico          String?          @db.Text
+  data_entrada           DateTime         @default(now()) @db.Timestamp(3) // Especificando a precisão
+  status                 StatusManutencao @default(Pendente)  
+  tecnico_responsavel    usuarios         @relation("ManutencoesDoTecnico", fields: [tecnico_responsavel_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }

@@ -1,6 +1,6 @@
 // src/controllers/usuarioController.ts
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import bcrypt from 'bcrypt';
 
@@ -63,11 +63,19 @@ export const createUser = async (req: Request, res: Response) => {
         hashed_password: hashedPassword,
       },
     });
-    // Omitir a senha da resposta
     const { hashed_password, ...userResponse } = newUser;
     res.status(201).json(userResponse);
   } catch (error) {
-    res.status(400).json({ message: 'Dados inválidos ou usuário já existe.', details: error });
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      if (error.code === 'P2002') {
+        return res.status(409).json({ message: `O nome de utilizador ou email fornecido já está em uso.` });
+      }
+    }
+    if (error instanceof z.ZodError) {
+      // CORRIGIDO: Alterado de error.errors para error.issues
+      return res.status(400).json({ message: 'Dados inválidos.', details: error.issues });
+    }
+    res.status(500).json({ message: 'Ocorreu um erro interno ao criar o utilizador.' });
   }
 };
 
@@ -97,7 +105,6 @@ export const updateUser = async (req: Request, res: Response) => {
 export const deleteUser = async (req: Request, res: Response) => {
   const { id } = req.params;
   
-  // Impede que o usuário se auto-delete
   if (req.user?.id === Number(id)) {
       return res.status(403).json({ message: 'Você não pode excluir a si mesmo.' });
   }
@@ -113,7 +120,6 @@ export const deleteUser = async (req: Request, res: Response) => {
 export const resetPasswordByAdmin = async (req: Request, res: Response) => {
   const { username, newPassword } = req.body;
 
-  // Validação dos dados recebidos
   if (!username || !newPassword || newPassword.length < 6) {
     return res.status(400).json({ 
       message: 'Nome de usuário e uma nova senha com no mínimo 6 caracteres são obrigatórios.' 
@@ -121,17 +127,14 @@ export const resetPasswordByAdmin = async (req: Request, res: Response) => {
   }
 
   try {
-    // Busca o usuário pelo username fornecido
     const user = await prisma.usuarios.findUnique({ where: { username } });
 
     if (!user) {
       return res.status(404).json({ message: 'Usuário não encontrado.' });
     }
 
-    // Gera o hash da nova senha
     const newHashedPassword = await bcrypt.hash(newPassword, 10);
 
-    // Atualiza a senha do usuário no banco de dados
     await prisma.usuarios.update({
       where: { id: user.id },
       data: { hashed_password: newHashedPassword },

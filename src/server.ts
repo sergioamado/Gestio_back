@@ -7,6 +7,7 @@ import unidadeRoutes from './routes/unidadeRoutes';
 import usuarioRoutes from './routes/usuarioRoutes';
 import solicitacaoRoutes from './routes/solicitacaoRoutes';
 import relatorioRoutes from './routes/relatorioRoutes';
+import manutencaoEletronicaRoutes from './routes/manutencaoEletronicaRoutes';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -22,6 +23,7 @@ app.use('/api/usuarios', usuarioRoutes);
 app.use('/api/unidades', unidadeRoutes);
 app.use('/api/solicitacoes', solicitacaoRoutes);
 app.use('/api/relatorios', relatorioRoutes);
+app.use('/api/manutencao-eletronica', manutencaoEletronicaRoutes);
 
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
