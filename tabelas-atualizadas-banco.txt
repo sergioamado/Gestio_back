@@ -1,0 +1,122 @@
+-- Criação da tabela de Impressoras
+CREATE TABLE "Impressora" (
+    "id" SERIAL NOT NULL,
+    "nome" VARCHAR(150) NOT NULL,
+    "modelo" VARCHAR(100) NOT NULL,
+    "numero_serie" VARCHAR(100) NOT NULL,
+    "ip" VARCHAR(45),
+    "localizacao" VARCHAR(255) NOT NULL,
+    "servidor" VARCHAR(100),
+    "politicas_aplicadas" BOOLEAN NOT NULL DEFAULT false,
+    "status_verificacao" VARCHAR(50) NOT NULL DEFAULT 'Não Verificado',
+    "unidade_id" INTEGER NOT NULL,
+
+    CONSTRAINT "Impressora_pkey" PRIMARY KEY ("id")
+);
+
+-- Criação da tabela de Controle de Suprimentos
+CREATE TABLE "ControleSuprimentos" (
+    "id" SERIAL NOT NULL,
+    "data" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "numero_glpi" VARCHAR(50),
+    "unidade_imagem_solicitadas" INTEGER NOT NULL DEFAULT 0,
+    "toner_preto_solicitados" INTEGER NOT NULL DEFAULT 0,
+    "toner_ciano_solicitados" INTEGER NOT NULL DEFAULT 0,
+    "toner_magenta_solicitados" INTEGER NOT NULL DEFAULT 0,
+    "toner_amarelo_solicitados" INTEGER NOT NULL DEFAULT 0,
+    "unidade_id" INTEGER NOT NULL,
+    "impressora_id" INTEGER NOT NULL,
+
+    CONSTRAINT "ControleSuprimentos_pkey" PRIMARY KEY ("id")
+);
+
+-- Criação da tabela de Atendimentos
+CREATE TABLE "AtendimentoImpressora" (
+    "id" SERIAL NOT NULL,
+    "data" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "numero_glpi" VARCHAR(50) NOT NULL,
+    "setor_visitado" BOOLEAN NOT NULL DEFAULT false,
+    "necessita_pecas" BOOLEAN NOT NULL DEFAULT false,
+    "descricao_pecas" TEXT,
+    "chamado_assistencia" VARCHAR(100),
+    "assistencia_realizada" BOOLEAN NOT NULL DEFAULT false,
+    "parecer_tecnico" TEXT,
+    "assistencia_concluiu" BOOLEAN NOT NULL DEFAULT false,
+    "parecer_final_assistencia" TEXT,
+    "necessita_backup" BOOLEAN NOT NULL DEFAULT false,
+    "backup_impressora_nome" VARCHAR(150),
+    "backup_impressora_modelo" VARCHAR(100),
+    "backup_numero_serie" VARCHAR(100),
+    "backup_ip" VARCHAR(45),
+    "backup_data_disponibilizacao" TIMESTAMPTZ(6),
+    "backup_data_retirada" TIMESTAMPTZ(6),
+    "unidade_id" INTEGER NOT NULL,
+    "impressora_id" INTEGER NOT NULL,
+
+    CONSTRAINT "AtendimentoImpressora_pkey" PRIMARY KEY ("id")
+);
+
+-- Criação da tabela de Impressão Fora da Unidade
+CREATE TABLE "ImpressaoForaUnidade" (
+    "id" SERIAL NOT NULL,
+    "data_inicio" DATE NOT NULL,
+    "data_fim" DATE,
+    "usuario_id" INTEGER NOT NULL,
+    "unidade_original_id" INTEGER NOT NULL,
+    "unidade_temporaria_id" INTEGER NOT NULL,
+
+    CONSTRAINT "ImpressaoForaUnidade_pkey" PRIMARY KEY ("id")
+);
+
+-- Adição de Índices e Chaves Únicas
+CREATE UNIQUE INDEX "Impressora_numero_serie_key" ON "Impressora"("numero_serie");
+CREATE UNIQUE INDEX "Impressora_ip_key" ON "Impressora"("ip");
+
+-- Adição das Chaves Estrangeiras (Relações)
+ALTER TABLE "Impressora" ADD CONSTRAINT "Impressora_unidade_id_fkey" FOREIGN KEY ("unidade_id") REFERENCES "unidades_organizacionais"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "ControleSuprimentos" ADD CONSTRAINT "ControleSuprimentos_unidade_id_fkey" FOREIGN KEY ("unidade_id") REFERENCES "unidades_organizacionais"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "ControleSuprimentos" ADD CONSTRAINT "ControleSuprimentos_impressora_id_fkey" FOREIGN KEY ("impressora_id") REFERENCES "Impressora"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "AtendimentoImpressora" ADD CONSTRAINT "AtendimentoImpressora_unidade_id_fkey" FOREIGN KEY ("unidade_id") REFERENCES "unidades_organizacionais"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "AtendimentoImpressora" ADD CONSTRAINT "AtendimentoImpressora_impressora_id_fkey" FOREIGN KEY ("impressora_id") REFERENCES "Impressora"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "ImpressaoForaUnidade" ADD CONSTRAINT "ImpressaoForaUnidade_usuario_id_fkey" FOREIGN KEY ("usuario_id") REFERENCES "usuarios"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "ImpressaoForaUnidade" ADD CONSTRAINT "ImpressaoForaUnidade_unidade_original_id_fkey" FOREIGN KEY ("unidade_original_id") REFERENCES "unidades_organizacionais"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "ImpressaoForaUnidade" ADD CONSTRAINT "ImpressaoForaUnidade_unidade_temporaria_id_fkey" FOREIGN KEY ("unidade_temporaria_id") REFERENCES "unidades_organizacionais"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- Conceder permissões de uso geral no esquema
+GRANT USAGE ON SCHEMA public TO almox_user;
+
+-- Conceder permissões para todas as tabelas existentes e futuras no esquema
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO almox_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO almox_user;
+
+-- Conceder permissões para todas as sequências (necessário para IDs automáticos)
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO almox_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO almox_user;
+
+-- Adiciona a coluna "ativo" à tabela "Impressora"
+ALTER TABLE "Impressora" ADD COLUMN "ativo" BOOLEAN NOT NULL DEFAULT true;
+
+
+
+-- Apaga a tabela incorreta
+DROP TABLE "ControleSuprimentos";
+
+-- Recria a tabela com as colunas e relações corretas
+CREATE TABLE "ControleSuprimentos" (
+    "id" SERIAL NOT NULL,
+    "data" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "numero_glpi" VARCHAR(50),
+    "unidade_imagem_solicitadas" INTEGER NOT NULL DEFAULT 0,
+    "toner_preto_solicitados" INTEGER NOT NULL DEFAULT 0,
+    "toner_ciano_solicitados" INTEGER NOT NULL DEFAULT 0,
+    "toner_magenta_solicitados" INTEGER NOT NULL DEFAULT 0,
+    "toner_amarelo_solicitados" INTEGER NOT NULL DEFAULT 0,
+    "tecnico_id" INTEGER NOT NULL,
+    "impressora_id" INTEGER NOT NULL,
+
+    CONSTRAINT "ControleSuprimentos_pkey" PRIMARY KEY ("id")
+);
+
+-- Adiciona as chaves estrangeiras
+ALTER TABLE "ControleSuprimentos" ADD CONSTRAINT "ControleSuprimentos_tecnico_id_fkey" FOREIGN KEY ("tecnico_id") REFERENCES "usuarios"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "ControleSuprimentos" ADD CONSTRAINT "ControleSuprimentos_impressora_id_fkey" FOREIGN KEY ("impressora_id") REFERENCES "Impressora"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

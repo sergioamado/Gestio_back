@@ -7,20 +7,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum Role {
-  admin
-  gerente
-  tecnico
-  tecnico_impressora
-  tecnico_eletronica
-}
-
-enum StatusManutencao {
-  Pendente
-  Em_manutencao
-  Concluido
-}
-
 model itens {
   id                       Int                      @id @default(autoincrement())
   codigo_sipac             String?                  @db.VarChar(50)
@@ -60,47 +46,53 @@ model solicitacao_itens {
 }
 
 model solicitacoes {
-  id                       Int                      @id @default(autoincrement())
-  usuario_id               Int
-  responsavel_usuario_id   Int
-  setor_equipamento        String?                  @db.VarChar(255)
-  numero_glpi              String?                  @db.VarChar(50)
-  patrimonio               String?                  @db.VarChar(50)
-  data_solicitacao         DateTime?                @default(now()) @db.Timestamptz(6)
-  status                   String                   @default("Pendente") @db.VarChar(50)
-  unidade_id               Int
-  solicitacao_itens        solicitacao_itens[]
-  unidades_organizacionais unidades_organizacionais @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  solicitante              usuarios                 @relation("SolicitacoesDoUsuario", fields: [usuario_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  responsavel              usuarios                 @relation("SolicitacoesDoResponsavel", fields: [responsavel_usuario_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id                                                     Int                      @id @default(autoincrement())
+  usuario_id                                             Int
+  responsavel_usuario_id                                 Int
+  setor_equipamento                                      String?                  @db.VarChar(255)
+  numero_glpi                                            String?                  @db.VarChar(50)
+  patrimonio                                             String?                  @db.VarChar(50)
+  data_solicitacao                                       DateTime?                @default(now()) @db.Timestamptz(6)
+  status                                                 String                   @default("Pendente") @db.VarChar(50)
+  unidade_id                                             Int
+  solicitacao_itens                                      solicitacao_itens[]
+  usuarios_solicitacoes_responsavel_usuario_idTousuarios usuarios                 @relation("solicitacoes_responsavel_usuario_idTousuarios", fields: [responsavel_usuario_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  unidades_organizacionais                               unidades_organizacionais @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  usuarios_solicitacoes_usuario_idTousuarios             usuarios                 @relation("solicitacoes_usuario_idTousuarios", fields: [usuario_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model unidades_organizacionais {
-  id           Int            @id @default(autoincrement())
-  nome         String         @unique @db.VarChar(255)
-  sigla        String?        @unique @db.VarChar(20)
-  campus       String?        @db.VarChar(100)
-  data_criacao DateTime?      @default(now()) @db.Timestamptz(6)
-  itens        itens[]
-  solicitacoes solicitacoes[]
-  usuarios     usuarios[]
+  id                      Int                     @id @default(autoincrement())
+  nome                    String                  @unique @db.VarChar(255)
+  sigla                   String?                 @unique @db.VarChar(20)
+  campus                  String?                 @db.VarChar(100)
+  data_criacao            DateTime?               @default(now()) @db.Timestamptz(6)
+  atendimentos_impressora AtendimentoImpressora[]
+  impressoes_originais    ImpressaoForaUnidade[]  @relation("UnidadeOriginal")
+  impressoes_temporarias  ImpressaoForaUnidade[]  @relation("UnidadeTemporaria")
+  impressoras             Impressora[]
+  itens                   itens[]
+  solicitacoes            solicitacoes[]
+  usuarios                usuarios[]
 }
 
 model usuarios {
-  id                          Int                       @id @default(autoincrement())
-  username                    String                    @unique @db.VarChar(100)
-  hashed_password             String                    @db.VarChar(255)
-  nome_completo               String                    @db.VarChar(255)
-  role                        String                    @db.VarChar(50)
-  telefone                    String?                   @db.VarChar(20)
-  email                       String?                   @unique @db.VarChar(255)
-  unidade_id                  Int?
-  data_criacao                DateTime?                 @default(now()) @db.Timestamptz(6)
-  notificacoes                notificacoes[]
-  solicitacoes_criadas        solicitacoes[]            @relation("SolicitacoesDoUsuario")
-  solicitacoes_responsaveis   solicitacoes[]            @relation("SolicitacoesDoResponsavel")
-  unidades_organizacionais    unidades_organizacionais? @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  manutencoes_eletronicas     manutencao_eletronica[]   @relation("ManutencoesDoTecnico")
+  id                                                         Int                       @id @default(autoincrement())
+  username                                                   String                    @unique @db.VarChar(100)
+  hashed_password                                            String                    @db.VarChar(255)
+  nome_completo                                              String                    @db.VarChar(255)
+  role                                                       String                    @db.VarChar(50)
+  telefone                                                   String?                   @db.VarChar(20)
+  email                                                      String?                   @unique @db.VarChar(255)
+  unidade_id                                                 Int?
+  data_criacao                                               DateTime?                 @default(now()) @db.Timestamptz(6)
+  requisicoes_suprimentos                                    ControleSuprimentos[]
+  impressoes_fora_unidade                                    ImpressaoForaUnidade[]
+  manutencoes_eletronicas                                    manutencao_eletronica[]
+  notificacoes                                               notificacoes[]
+  solicitacoes_solicitacoes_responsavel_usuario_idTousuarios solicitacoes[]            @relation("solicitacoes_responsavel_usuario_idTousuarios")
+  solicitacoes_solicitacoes_usuario_idTousuarios             solicitacoes[]            @relation("solicitacoes_usuario_idTousuarios")
+  unidades_organizacionais                                   unidades_organizacionais? @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model manutencao_eletronica {
@@ -108,9 +100,96 @@ model manutencao_eletronica {
   glpi                   String?          @db.VarChar(50)
   tecnico_responsavel_id Int
   equipamento            String           @db.VarChar(255)
-  descricao_problema     String           @db.Text // Especificando o tipo TEXT
-  laudo_tecnico          String?          @db.Text
-  data_entrada           DateTime         @default(now()) @db.Timestamp(3) // Especificando a precisão
-  status                 StatusManutencao @default(Pendente)  
-  tecnico_responsavel    usuarios         @relation("ManutencoesDoTecnico", fields: [tecnico_responsavel_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  descricao_problema     String
+  data_entrada           DateTime         @default(now())
+  status                 StatusManutencao @default(Pendente)
+  laudo_tecnico          String?
+  usuarios               usuarios         @relation(fields: [tecnico_responsavel_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model Impressora {
+  id                       Int                      @id @default(autoincrement())
+  nome                     String                   @db.VarChar(150)
+  modelo                   String                   @db.VarChar(100)
+  numero_serie             String                   @unique @db.VarChar(100)
+  ip                       String?                  @unique @db.VarChar(45)
+  localizacao              String                   @db.VarChar(255)
+  servidor                 String?                  @db.VarChar(100)
+  politicas_aplicadas      Boolean                  @default(false)
+  status_verificacao       String                   @default("Não Verificado") @db.VarChar(50)
+  unidade_id               Int
+  ativo                    Boolean                  @default(true)
+  is_colorida              Boolean                  @default(false)
+  atendimentos             AtendimentoImpressora[]
+  unidades_organizacionais unidades_organizacionais @relation(fields: [unidade_id], references: [id])
+}
+
+model AtendimentoImpressora {
+  id                           Int                      @id @default(autoincrement())
+  data                         DateTime                 @default(now()) @db.Timestamptz(6)
+  numero_glpi                  String                   @db.VarChar(50)
+  setor_visitado               Boolean                  @default(false)
+  necessita_pecas              Boolean                  @default(false)
+  descricao_pecas              String?
+  chamado_assistencia          String?                  @db.VarChar(100)
+  assistencia_realizada        Boolean                  @default(false)
+  parecer_tecnico              String?
+  assistencia_concluiu         Boolean                  @default(false)
+  parecer_final_assistencia    String?
+  necessita_backup             Boolean                  @default(false)
+  backup_impressora_nome       String?                  @db.VarChar(150)
+  backup_impressora_modelo     String?                  @db.VarChar(100)
+  backup_numero_serie          String?                  @db.VarChar(100)
+  backup_ip                    String?                  @db.VarChar(45)
+  backup_data_disponibilizacao DateTime?                @db.Timestamptz(6)
+  backup_data_retirada         DateTime?                @db.Timestamptz(6)
+  unidade_id                   Int
+  impressora_id                Int
+  impressora                   Impressora               @relation(fields: [impressora_id], references: [id])
+  unidades_organizacionais     unidades_organizacionais @relation(fields: [unidade_id], references: [id])
+}
+
+model ImpressaoForaUnidade {
+  id                    Int                      @id @default(autoincrement())
+  data_inicio           DateTime                 @db.Date
+  data_fim              DateTime?                @db.Date
+  usuario_id            Int
+  unidade_original_id   Int
+  unidade_temporaria_id Int
+  unidade_original      unidades_organizacionais @relation("UnidadeOriginal", fields: [unidade_original_id], references: [id])
+  unidade_temporaria    unidades_organizacionais @relation("UnidadeTemporaria", fields: [unidade_temporaria_id], references: [id])
+  usuario               usuarios                 @relation(fields: [usuario_id], references: [id])
+}
+
+model EstoqueSuprimentos {
+  id                      Int      @id @default(1)
+  unidade_imagem_total    Int      @default(0)
+  toner_preto_total       Int      @default(0)
+  toner_ciano_total       Int      @default(0)
+  toner_magenta_total     Int      @default(0)
+  toner_amarelo_total     Int      @default(0)
+  data_ultima_atualizacao DateTime @updatedAt
+}
+
+model ControleSuprimentos {
+  id                         Int      @id @default(autoincrement())
+  data                       DateTime @default(now()) @db.Timestamptz(6)
+  numero_glpi                String?  @db.VarChar(50)
+  
+  unidade_imagem_solicitadas Int      @default(0)
+  toner_preto_solicitados    Int      @default(0)
+  toner_ciano_solicitados    Int      @default(0)
+  toner_magenta_solicitados  Int      @default(0)
+  toner_amarelo_solicitados  Int      @default(0)
+  tecnico_id                 Int      // Quem requisitou
+  impressora_id              Int      // Para qual impressora
+
+  tecnico                    usuarios   @relation(fields: [tecnico_id], references: [id])
+  impressora                 Impressora @relation(fields: [impressora_id], references: [id])
+}
+
+enum StatusManutencao {
+  Pendente
+  Em_manutencao
+  Concluido
 }

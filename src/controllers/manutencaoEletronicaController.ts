@@ -28,7 +28,7 @@ export const getAllManutencoes = async (req: Request, res: Response) => {
     const manutencoes = await prisma.manutencao_eletronica.findMany({
       orderBy: { data_entrada: 'asc' },
       include: {
-        tecnico_responsavel: {
+        usuarios: {
           select: { nome_completo: true },
         },
       },

@@ -18,49 +18,62 @@ const solicitacaoSchema = z.object({
 });
 
 export const getAllSolicitacoes = async (req: Request, res: Response) => {
-  const { unidade_id, status, tecnico_id_filtro, id_filtro } = req.query;
-  const where: any = {};
+  try {
+    const { unidade_id, status, tecnico_id_filtro } = req.query;
+    const where: Prisma.solicitacoesWhereInput = {};
 
-  if (unidade_id) where.unidade_id = Number(unidade_id);
-  if (status) where.status = String(status);
-  if (tecnico_id_filtro) where.responsavel_usuario_id = Number(tecnico_id_filtro);
-  if (id_filtro) where.id = Number(id_filtro);
+    if (unidade_id) where.unidade_id = Number(unidade_id);
+    if (status) where.status = String(status);
+    if (tecnico_id_filtro) where.responsavel_usuario_id = Number(tecnico_id_filtro);
 
-  const solicitacoes = await prisma.solicitacoes.findMany({
-    where,
-    include: {
-        responsavel: { select: { nome_completo: true } },
-        solicitacao_itens: {
-          include: {
-            itens: {
-              select: {
-                descricao: true,
+    const solicitacoes = await prisma.solicitacoes.findMany({
+      where,
+      include: {
+          // CORREÇÃO: Adicionado o include para os itens da solicitação
+          solicitacao_itens: {
+            include: {
+              itens: {
+                select: { descricao: true }
               }
             }
+          },
+          usuarios_solicitacoes_responsavel_usuario_idTousuarios: { 
+              select: { nome_completo: true } 
           }
-        }
-    },
-    orderBy: { data_solicitacao: 'desc' }
-  });
-  res.json(solicitacoes);
+      },
+      orderBy: { data_solicitacao: 'desc' }
+    });
+    
+    const respostaFormatada = solicitacoes.map(sol => {
+      const tecnicoNome = sol.usuarios_solicitacoes_responsavel_usuario_idTousuarios?.nome_completo || 'Técnico Removido';
+      const { usuarios_solicitacoes_responsavel_usuario_idTousuarios, ...restoDaSolicitacao } = sol;
+
+      return {
+        ...restoDaSolicitacao,
+        tecnico_responsavel: tecnicoNome,
+      };
+    });
+
+    res.json(respostaFormatada);
+
+  } catch (error) {
+    console.error("Erro em getAllSolicitacoes:", error);
+    res.status(500).json({ message: "Erro interno ao buscar solicitações." });
+  }
 };
 
-// Criar nova solicitação com transação
+// ... (createSolicitacao e getSolicitacaoById permanecem iguais)
 export const createSolicitacao = async (req: Request, res: Response) => {
   try {
     const { itens, ...solicitacaoData } = solicitacaoSchema.parse(req.body);
-    const usuario_id = req.user!.id; // Pega o ID do usuário logado pelo token
+    const usuario_id = req.user!.id;
 
-    // Prisma Transaction: ou tudo funciona, ou nada é salvo no banco
     const novaSolicitacao = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      // 1. Cria o registro principal da solicitação
       const solicitacao = await tx.solicitacoes.create({
         data: { ...solicitacaoData, usuario_id },
       });
 
-      // 2. Itera sobre os itens do carrinho
       for (const item of itens) {
-        // 3. Adiciona o item à tabela de junção 'solicitacao_itens'
         await tx.solicitacao_itens.create({
           data: {
             solicitacao_id: solicitacao.id,
@@ -68,8 +81,6 @@ export const createSolicitacao = async (req: Request, res: Response) => {
             quantidade_solicitada: item.quantidade,
           },
         });
-
-        // 4. Atualiza (diminui) a quantidade no estoque
         await tx.itens.update({
           where: { id: item.id },
           data: {
@@ -95,8 +106,12 @@ export const getSolicitacaoById = async (req: Request, res: Response) => {
     const solicitacao = await prisma.solicitacoes.findUnique({
       where: { id: Number(id) },
       include: {
-        solicitante: { select: { nome_completo: true } },
-        responsavel: { select: { nome_completo: true } },
+        usuarios_solicitacoes_usuario_idTousuarios: { 
+          select: { nome_completo: true } 
+        },
+        usuarios_solicitacoes_responsavel_usuario_idTousuarios: { 
+          select: { nome_completo: true } 
+        },
         solicitacao_itens: {
           include: {
             itens: true,
@@ -104,12 +119,23 @@ export const getSolicitacaoById = async (req: Request, res: Response) => {
         }
       }
     });
+
     if (!solicitacao) {
       return res.status(404).json({ message: 'Solicitação não encontrada.' });
     }
-    res.json(solicitacao);
+    const respostaFormatada = {
+      ...solicitacao,
+      solicitante_nome: solicitacao.usuarios_solicitacoes_usuario_idTousuarios?.nome_completo || 'Solicitante não encontrado',
+      tecnico_responsavel: solicitacao.usuarios_solicitacoes_responsavel_usuario_idTousuarios?.nome_completo || 'Técnico não encontrado'
+    };
+    delete (respostaFormatada as any).usuarios_solicitacoes_usuario_idTousuarios;
+    delete (respostaFormatada as any).usuarios_solicitacoes_responsavel_usuario_idTousuarios;
+
+    res.json(respostaFormatada);
+
   } catch (error) {
-    res.status(500).json({ message: 'Erro ao buscar solicitação.' });
+    console.error("Erro em getSolicitacaoById:", error);
+    res.status(500).json({ message: 'Erro interno ao buscar detalhes da solicitação.' });
   }
 };
 
@@ -132,16 +158,15 @@ export const updateStatusSolicitacao = async (req: Request, res: Response) => {
     }
 };
 
-
- export const getLatestSolicitacoes = async (req: Request, res: Response) => {
+export const getLatestSolicitacoes = async (req: Request, res: Response) => {
     const { id: userId, role, unidade_id } = req.user!; 
     
     try {
-        let whereClause: any = {};
+        let whereClause: Prisma.solicitacoesWhereInput = {};
         
         if (role === 'gerente') {
             whereClause = { 
-                unidade_id: unidade_id,
+                unidade_id: unidade_id ?? undefined,
                 status: 'Pendente' 
             };
         } 
@@ -151,9 +176,13 @@ export const updateStatusSolicitacao = async (req: Request, res: Response) => {
 
         const solicitacoes = await prisma.solicitacoes.findMany({
             where: whereClause,
+            take: 5,
             orderBy: { data_solicitacao: 'desc' },
             include: {
-                responsavel: { select: { nome_completo: true } },
+                // CORREÇÃO: Usar o nome de relação correto do Prisma
+                usuarios_solicitacoes_responsavel_usuario_idTousuarios: { 
+                    select: { nome_completo: true } 
+                },
             }
         });
 
@@ -161,7 +190,7 @@ export const updateStatusSolicitacao = async (req: Request, res: Response) => {
             id: s.id,
             data_solicitacao: s.data_solicitacao,
             status: s.status,
-            tecnico_responsavel: s.responsavel?.nome_completo || 'Não definido',
+            tecnico_responsavel: s.usuarios_solicitacoes_responsavel_usuario_idTousuarios?.nome_completo || 'Não definido',
             numero_glpi: s.numero_glpi
         }));
 
@@ -173,11 +202,9 @@ export const updateStatusSolicitacao = async (req: Request, res: Response) => {
     }
 };
 
-
-
 export const updateSolicitacaoItemStatus = async (req: Request, res: Response) => {
-    const { itemId } = req.params; // ID do 'solicitacao_itens'
-    const { status_entrega } = req.body; // 'Entregue' ou 'Pendente'
+    const { itemId } = req.params;
+    const { status_entrega } = req.body;
 
     try {
         const itemAtualizado = await prisma.solicitacao_itens.update({

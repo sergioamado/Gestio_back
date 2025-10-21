@@ -8,13 +8,14 @@ import usuarioRoutes from './routes/usuarioRoutes';
 import solicitacaoRoutes from './routes/solicitacaoRoutes';
 import relatorioRoutes from './routes/relatorioRoutes';
 import manutencaoEletronicaRoutes from './routes/manutencaoEletronicaRoutes';
+import impressoraRoutes from './routes/impressoraRoutes';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Middlewares
-app.use(cors()); // Permite requisições de diferentes origens (seu frontend React)
-app.use(express.json()); // Habilita o parsing de JSON no corpo das requisições
+app.use(cors()); 
+app.use(express.json());
 
 // Rotas da API
 app.use('/api/auth', authRoutes);
@@ -24,6 +25,7 @@ app.use('/api/unidades', unidadeRoutes);
 app.use('/api/solicitacoes', solicitacaoRoutes);
 app.use('/api/relatorios', relatorioRoutes);
 app.use('/api/manutencao-eletronica', manutencaoEletronicaRoutes);
+app.use('/api/gestao-impressoras', impressoraRoutes);
 
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
