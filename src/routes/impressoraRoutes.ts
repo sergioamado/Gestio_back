@@ -10,7 +10,8 @@ import {
     getAtendimentos,
     createAtendimento,
     getEstoqueSuprimentos,
-    addEstoqueSuprimentos
+    addEstoqueSuprimentos,
+    updateAtendimento
 } from '../controllers/impressoraController';
 import { authMiddleware, adminOnlyMiddleware } from '../middlewares/authMiddleware';
 
@@ -36,6 +37,7 @@ router.put('/estoque', adminOnlyMiddleware, addEstoqueSuprimentos);
 // Rotas para Atendimentos
 router.get('/atendimentos', getAtendimentos);
 router.post('/atendimentos', createAtendimento);
+router.put('/atendimentos/:id', updateAtendimento);
 
 
 export default router;

@@ -62,18 +62,18 @@ model solicitacoes {
 }
 
 model unidades_organizacionais {
-  id                      Int                     @id @default(autoincrement())
-  nome                    String                  @unique @db.VarChar(255)
-  sigla                   String?                 @unique @db.VarChar(20)
-  campus                  String?                 @db.VarChar(100)
-  data_criacao            DateTime?               @default(now()) @db.Timestamptz(6)
-  atendimentos_impressora AtendimentoImpressora[]
-  impressoes_originais    ImpressaoForaUnidade[]  @relation("UnidadeOriginal")
-  impressoes_temporarias  ImpressaoForaUnidade[]  @relation("UnidadeTemporaria")
-  impressoras             Impressora[]
-  itens                   itens[]
-  solicitacoes            solicitacoes[]
-  usuarios                usuarios[]
+  id                     Int                     @id @default(autoincrement())
+  nome                   String                  @unique @db.VarChar(255)
+  sigla                  String?                 @unique @db.VarChar(20)
+  campus                 String?                 @db.VarChar(100)
+  data_criacao           DateTime?               @default(now()) @db.Timestamptz(6)
+  atendimentos           AtendimentoImpressora[]
+  impressoes_originais   ImpressaoForaUnidade[]  @relation("UnidadeOriginal")
+  impressoes_temporarias ImpressaoForaUnidade[]  @relation("UnidadeTemporaria")
+  impressoras            Impressora[]
+  itens                  itens[]
+  solicitacoes           solicitacoes[]
+  usuarios               usuarios[]
 }
 
 model usuarios {
@@ -86,6 +86,7 @@ model usuarios {
   email                                                      String?                   @unique @db.VarChar(255)
   unidade_id                                                 Int?
   data_criacao                                               DateTime?                 @default(now()) @db.Timestamptz(6)
+  atendimentos_criados                                       AtendimentoImpressora[]
   requisicoes_suprimentos                                    ControleSuprimentos[]
   impressoes_fora_unidade                                    ImpressaoForaUnidade[]
   manutencoes_eletronicas                                    manutencao_eletronica[]
@@ -121,6 +122,7 @@ model Impressora {
   ativo                    Boolean                  @default(true)
   is_colorida              Boolean                  @default(false)
   atendimentos             AtendimentoImpressora[]
+  solicitacoes_suprimentos ControleSuprimentos[]
   unidades_organizacionais unidades_organizacionais @relation(fields: [unidade_id], references: [id])
 }
 
@@ -128,6 +130,7 @@ model AtendimentoImpressora {
   id                           Int                      @id @default(autoincrement())
   data                         DateTime                 @default(now()) @db.Timestamptz(6)
   numero_glpi                  String                   @db.VarChar(50)
+  status                       StatusAtendimento        @default(Aguardando_Assistencia)
   setor_visitado               Boolean                  @default(false)
   necessita_pecas              Boolean                  @default(false)
   descricao_pecas              String?
@@ -145,8 +148,12 @@ model AtendimentoImpressora {
   backup_data_retirada         DateTime?                @db.Timestamptz(6)
   unidade_id                   Int
   impressora_id                Int
+  tecnico_id                   Int
+  data_visita                  DateTime?                @db.Date
   impressora                   Impressora               @relation(fields: [impressora_id], references: [id])
+  tecnico                      usuarios                 @relation(fields: [tecnico_id], references: [id])
   unidades_organizacionais     unidades_organizacionais @relation(fields: [unidade_id], references: [id])
+  impressoes_redirecionadas    ImpressaoForaUnidade[]
 }
 
 model ImpressaoForaUnidade {
@@ -156,6 +163,8 @@ model ImpressaoForaUnidade {
   usuario_id            Int
   unidade_original_id   Int
   unidade_temporaria_id Int
+  atendimento_id        Int?
+  atendimento           AtendimentoImpressora?   @relation(fields: [atendimento_id], references: [id])
   unidade_original      unidades_organizacionais @relation("UnidadeOriginal", fields: [unidade_original_id], references: [id])
   unidade_temporaria    unidades_organizacionais @relation("UnidadeTemporaria", fields: [unidade_temporaria_id], references: [id])
   usuario               usuarios                 @relation(fields: [usuario_id], references: [id])
@@ -172,24 +181,32 @@ model EstoqueSuprimentos {
 }
 
 model ControleSuprimentos {
-  id                         Int      @id @default(autoincrement())
-  data                       DateTime @default(now()) @db.Timestamptz(6)
-  numero_glpi                String?  @db.VarChar(50)
-  
-  unidade_imagem_solicitadas Int      @default(0)
-  toner_preto_solicitados    Int      @default(0)
-  toner_ciano_solicitados    Int      @default(0)
-  toner_magenta_solicitados  Int      @default(0)
-  toner_amarelo_solicitados  Int      @default(0)
-  tecnico_id                 Int      // Quem requisitou
-  impressora_id              Int      // Para qual impressora
-
-  tecnico                    usuarios   @relation(fields: [tecnico_id], references: [id])
+  id                         Int        @id @default(autoincrement())
+  data                       DateTime   @default(now()) @db.Timestamptz(6)
+  numero_glpi                String?    @db.VarChar(50)
+  unidade_imagem_solicitadas Int        @default(0)
+  toner_preto_solicitados    Int        @default(0)
+  toner_ciano_solicitados    Int        @default(0)
+  toner_magenta_solicitados  Int        @default(0)
+  toner_amarelo_solicitados  Int        @default(0)
+  tecnico_id                 Int
+  impressora_id              Int
   impressora                 Impressora @relation(fields: [impressora_id], references: [id])
+  tecnico                    usuarios   @relation(fields: [tecnico_id], references: [id])
 }
 
 enum StatusManutencao {
   Pendente
   Em_manutencao
   Concluido
+}
+
+enum StatusAtendimento {
+  Aguardando_Assistencia
+  Em_Atendimento
+  Aguardando_Peca
+  Aguardando_Peca_Com_Backup
+  Aguardando_Peca_Impressao_Redirecionada
+  Concluido
+  Cancelado
 }

@@ -120,3 +120,49 @@ CREATE TABLE "ControleSuprimentos" (
 -- Adiciona as chaves estrangeiras
 ALTER TABLE "ControleSuprimentos" ADD CONSTRAINT "ControleSuprimentos_tecnico_id_fkey" FOREIGN KEY ("tecnico_id") REFERENCES "usuarios"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "ControleSuprimentos" ADD CONSTRAINT "ControleSuprimentos_impressora_id_fkey" FOREIGN KEY ("impressora_id") REFERENCES "Impressora"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+
+
+-- Apaga a tabela antiga se ela existir, para garantir uma recriação limpa
+DROP TABLE IF EXISTS "AtendimentoImpressora";
+
+-- Cria o novo tipo ENUM para os status
+CREATE TYPE "StatusAtendimento" AS ENUM ('Aguardando_Assistencia', 'Em_Atendimento', 'Aguardando_Peca', 'Aguardando_Peca_Com_Backup', 'Aguardando_Peca_Impressao_Redirecionada', 'Concluido', 'Cancelado');
+
+-- Recria a tabela AtendimentoImpressora com a nova estrutura
+CREATE TABLE "AtendimentoImpressora" (
+    "id" SERIAL NOT NULL,
+    "data" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "numero_glpi" VARCHAR(50) NOT NULL,
+    "status" "StatusAtendimento" NOT NULL DEFAULT 'Aguardando_Assistencia',
+    "setor_visitado" BOOLEAN NOT NULL DEFAULT false,
+    "necessita_pecas" BOOLEAN NOT NULL DEFAULT false,
+    "descricao_pecas" TEXT,
+    "chamado_assistencia" VARCHAR(100),
+    "assistencia_realizada" BOOLEAN NOT NULL DEFAULT false,
+    "parecer_tecnico" TEXT,
+    "assistencia_concluiu" BOOLEAN NOT NULL DEFAULT false,
+    "parecer_final_assistencia" TEXT,
+    "necessita_backup" BOOLEAN NOT NULL DEFAULT false,
+    "backup_impressora_nome" VARCHAR(150),
+    "backup_impressora_modelo" VARCHAR(100),
+    "backup_numero_serie" VARCHAR(100),
+    "backup_ip" VARCHAR(45),
+    "backup_data_disponibilizacao" TIMESTAMPTZ(6),
+    "backup_data_retirada" TIMESTAMPTZ(6),
+    "unidade_id" INTEGER NOT NULL,
+    "impressora_id" INTEGER NOT NULL,
+    "tecnico_id" INTEGER NOT NULL,
+
+    CONSTRAINT "AtendimentoImpressora_pkey" PRIMARY KEY ("id")
+);
+
+-- Adiciona a coluna de relacionamento na tabela ImpressaoForaUnidade
+ALTER TABLE "ImpressaoForaUnidade" ADD COLUMN "atendimento_id" INTEGER;
+
+-- Adiciona as chaves estrangeiras
+ALTER TABLE "AtendimentoImpressora" ADD CONSTRAINT "AtendimentoImpressora_unidade_id_fkey" FOREIGN KEY ("unidade_id") REFERENCES "unidades_organizacionais"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "AtendimentoImpressora" ADD CONSTRAINT "AtendimentoImpressora_impressora_id_fkey" FOREIGN KEY ("impressora_id") REFERENCES "Impressora"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "AtendimentoImpressora" ADD CONSTRAINT "AtendimentoImpressora_tecnico_id_fkey" FOREIGN KEY ("tecnico_id") REFERENCES "usuarios"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "ImpressaoForaUnidade" ADD CONSTRAINT "ImpressaoForaUnidade_atendimento_id_fkey" FOREIGN KEY ("atendimento_id") REFERENCES "AtendimentoImpressora"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "AtendimentoImpressora" ADD COLUMN "data_visita" DATE;
