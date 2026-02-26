@@ -6,11 +6,11 @@ import { authMiddleware, adminOnlyMiddleware } from '../middlewares/authMiddlewa
 const router = Router();
 
 // Todas as rotas de unidades exigem login e perfil de admin
-router.use(authMiddleware, adminOnlyMiddleware);
+router.use(authMiddleware);
 
 router.get('/', getAllUnidades);
-router.post('/', createUnidade);
-router.put('/:id', updateUnidade);
-router.delete('/:id', deleteUnidade);
+router.post('/', adminOnlyMiddleware, createUnidade);
+router.put('/:id', adminOnlyMiddleware, updateUnidade);
+router.delete('/:id', adminOnlyMiddleware, deleteUnidade);
 
 export default router;

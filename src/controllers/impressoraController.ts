@@ -1,6 +1,6 @@
 // src/controllers/impressoraController.ts
 import { Request, Response } from 'express';
-import { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient, StatusAtendimento } from '@prisma/client';
 import { z } from 'zod';
 
 const prisma = new PrismaClient();
@@ -28,10 +28,9 @@ const atendimentoCreateSchema = z.object({
   tecnico_id: z.number().int(),
 });
 
-// >>>>> INÍCIO DA CORREÇÃO <<<<<
-// Schema para ATUALIZAR um atendimento. Todos os campos são opcionais.
+
 const atendimentoUpdateSchema = z.object({
-  status: z.nativeEnum(Prisma.StatusAtendimento).optional(),
+  status: z.nativeEnum(StatusAtendimento).optional(),
   setor_visitado: z.boolean().optional(),
   necessita_pecas: z.boolean().optional(),
   descricao_pecas: z.string().nullable().optional(),
@@ -50,10 +49,10 @@ const atendimentoUpdateSchema = z.object({
   backup_data_disponibilizacao: z.preprocess((arg) => (arg ? new Date(arg as string) : null), z.date().nullable()).optional(),
   backup_data_retirada: z.preprocess((arg) => (arg ? new Date(arg as string) : null), z.date().nullable()).optional(),
 }).partial();
-// >>>>> FIM DA CORREÇÃO <<<<<
 
 
-// --- FUNÇÕES DE IMPRESSORA (sem alterações) ---
+
+
 export const getAllImpressoras = async (req: Request, res: Response) => {
     const { ip, numero_serie, unidade_id_filtro, politicas_aplicadas } = req.query;
     const where: Prisma.ImpressoraWhereInput = { ativo: true };
@@ -116,7 +115,7 @@ export const deleteImpressora = async (req: Request, res: Response) => {
 };
 
 
-// --- FUNÇÕES DE CONTROLE DE SUPRIMENTOS (sem alterações) ---
+
 export const getControleSuprimentos = async (req: Request, res: Response) => {
     try {
         const registros = await prisma.controleSuprimentos.findMany({ 
@@ -179,7 +178,7 @@ export const createControleSuprimentos = async (req: Request, res: Response) => 
 };
 
 
-// --- FUNÇÕES DE ESTOQUE DE SUPRIMENTOS (sem alterações) ---
+
 export const getEstoqueSuprimentos = async (req: Request, res: Response) => {
     try {
         const estoque = await prisma.estoqueSuprimentos.findUnique({
@@ -217,7 +216,7 @@ export const addEstoqueSuprimentos = async (req: Request, res: Response) => {
 };
 
 
-// --- FUNÇÕES DE ATENDIMENTOS (CORRIGIDAS) ---
+
 
 export const getAtendimentos = async (req: Request, res: Response) => {
     try {
@@ -245,7 +244,7 @@ export const createAtendimento = async (req: Request, res: Response) => {
     }
 };
 
-// >>>>> INÍCIO DA CORREÇÃO <<<<<
+
 export const updateAtendimento = async (req: Request, res: Response) => {
     const { id } = req.params;
     try {
@@ -260,4 +259,3 @@ export const updateAtendimento = async (req: Request, res: Response) => {
         res.status(400).json({ message: 'Erro ao atualizar atendimento.', details: error });
     }
 };
-// >>>>> FIM DA CORREÇÃO <<<<<

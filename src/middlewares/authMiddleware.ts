@@ -59,3 +59,10 @@ export const eletronicaOuAdminMiddleware = (req: Request, res: Response, next: N
   }
   next();
 };
+
+export const impressoraOuAdminMiddleware = (req: Request, res: Response, next: NextFunction) => {
+  if (req.user?.role !== 'admin' && req.user?.role !== 'tecnico_impressora') {
+    return res.status(403).json({ message: 'Acesso negado. Requer perfil de Administrador ou Técnico de Impressora.' });
+  }
+  next();
+};

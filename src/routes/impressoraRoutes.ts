@@ -13,31 +13,29 @@ import {
     addEstoqueSuprimentos,
     updateAtendimento
 } from '../controllers/impressoraController';
-import { authMiddleware, adminOnlyMiddleware } from '../middlewares/authMiddleware';
+import { authMiddleware, impressoraOuAdminMiddleware } from '../middlewares/authMiddleware';
 
 const router = Router();
 router.use(authMiddleware);
 
 // Rotas para Impressoras
-router.get('/impressoras', getAllImpressoras);
-router.post('/impressoras', createImpressora);
-
-// --- ROTAS FALTANTES ADICIONADAS AQUI ---
-router.put('/impressoras/:id', updateImpressora);
-router.delete('/impressoras/:id', deleteImpressora);
+router.get('/impressoras', impressoraOuAdminMiddleware, getAllImpressoras);
+router.post('/impressoras', impressoraOuAdminMiddleware, createImpressora);
+router.put('/impressoras/:id', impressoraOuAdminMiddleware, updateImpressora);
+router.delete('/impressoras/:id', impressoraOuAdminMiddleware, deleteImpressora);
 
 // Rotas para Controle de Suprimentos
-router.get('/suprimentos', getControleSuprimentos);
-router.post('/suprimentos', createControleSuprimentos);
+router.get('/suprimentos', impressoraOuAdminMiddleware, getControleSuprimentos);
+router.post('/suprimentos',impressoraOuAdminMiddleware,  createControleSuprimentos);
 
 // Rotas para Estoque de Suprimentos
-router.get('/estoque', getEstoqueSuprimentos);
-router.put('/estoque', adminOnlyMiddleware, addEstoqueSuprimentos);
+router.get('/estoque', impressoraOuAdminMiddleware, getEstoqueSuprimentos);
+router.put('/estoque', impressoraOuAdminMiddleware, addEstoqueSuprimentos);
 
 // Rotas para Atendimentos
-router.get('/atendimentos', getAtendimentos);
-router.post('/atendimentos', createAtendimento);
-router.put('/atendimentos/:id', updateAtendimento);
+router.get('/atendimentos', impressoraOuAdminMiddleware, getAtendimentos);
+router.post('/atendimentos', impressoraOuAdminMiddleware,  createAtendimento);
+router.put('/atendimentos/:id', impressoraOuAdminMiddleware,  updateAtendimento);
 
 
 export default router;
