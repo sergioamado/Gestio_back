@@ -10,7 +10,8 @@ router.use(authMiddleware);
 router.get('/', getAllUsers);
 router.post('/', adminOnlyMiddleware, createUser);
 router.delete('/:id', adminOnlyMiddleware, deleteUser);
-router.put('/:id', adminOnlyMiddleware, updateUser);
 router.put('/reset-password', adminOnlyMiddleware, resetPasswordByAdmin);
+router.put('/:id', adminOnlyMiddleware, updateUser);
+
 
 export default router;

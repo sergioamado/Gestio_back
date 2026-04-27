@@ -8,18 +8,21 @@ datasource db {
 }
 
 model itens {
-  id                       Int                      @id @default(autoincrement())
-  codigo_sipac             String?                  @db.VarChar(50)
-  pregao                   String?                  @db.VarChar(100)
-  descricao                String
-  tipo                     String?                  @db.VarChar(100)
-  unidade_medida           String                   @default("UND") @db.VarChar(20)
-  localizacao              String?                  @db.VarChar(100)
-  quantidade               Int
-  preco_unitario           Decimal                  @db.Decimal(10, 2)
-  unidade_id               Int
+  id                Int                 @id @default(autoincrement())
+  codigo_sipac      String?             @db.VarChar(50)
+  codigo_ref        String?             @db.VarChar(50) // Novo: Código de referência interno
+  pregao            String?             @db.VarChar(100)
+  descricao         String
+  tipo              String?             @db.VarChar(100)
+  unidade_medida    String              @default("UND") @db.VarChar(20)
+  localizacao       String?             @db.VarChar(100)
+  quantidade        Int
+  preco_unitario    Decimal             @db.Decimal(10, 2)
+  unidade_id        Int
+  is_permanente     Boolean             @default(false) // Novo: Define se o item exige devolução
+  patrimonio_item   String?             @db.VarChar(50)  // Novo: Para peças com património único
   unidades_organizacionais unidades_organizacionais @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  solicitacao_itens        solicitacao_itens[]
+  solicitacao_itens solicitacao_itens[]
 
   @@unique([codigo_sipac, unidade_id])
 }
@@ -46,19 +49,23 @@ model solicitacao_itens {
 }
 
 model solicitacoes {
-  id                                                     Int                      @id @default(autoincrement())
-  usuario_id                                             Int
-  responsavel_usuario_id                                 Int
-  setor_equipamento                                      String?                  @db.VarChar(255)
-  numero_glpi                                            String?                  @db.VarChar(50)
-  patrimonio                                             String?                  @db.VarChar(50)
-  data_solicitacao                                       DateTime?                @default(now()) @db.Timestamptz(6)
-  status                                                 String                   @default("Pendente") @db.VarChar(50)
-  unidade_id                                             Int
-  solicitacao_itens                                      solicitacao_itens[]
-  usuarios_solicitacoes_responsavel_usuario_idTousuarios usuarios                 @relation("solicitacoes_responsavel_usuario_idTousuarios", fields: [responsavel_usuario_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  unidades_organizacionais                               unidades_organizacionais @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  usuarios_solicitacoes_usuario_idTousuarios             usuarios                 @relation("solicitacoes_usuario_idTousuarios", fields: [usuario_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id                      Int                 @id @default(autoincrement())
+  usuario_id              Int
+  responsavel_usuario_id  Int
+  setor_equipamento       String?             @db.VarChar(255)
+  numero_glpi             String?             @db.VarChar(50)
+  patrimonio              String?             @db.VarChar(50) // Equipamento em manutenção
+  data_solicitacao        DateTime?           @default(now()) @db.Timestamptz(6)
+  status                  String              @default("PENDENTE") @db.VarChar(50)
+  tipo_requisicao         String              @default("PEDIDO") @db.VarChar(20) // Novo: PEDIDO ou TESTE
+  justificativa           String?             @db.Text // Novo: Log de observações do técnico/admin
+  numero_pedido_externo   String?             @db.VarChar(100) // Novo: Rastreio de compra
+  documento_emitido_em    DateTime?           @db.Timestamptz(6) // Novo: Data de emissão de documento
+  unidade_id              Int
+  solicitacao_itens       solicitacao_itens[]
+  usuarios_solicitacoes_responsavel_usuario_idTousuarios usuarios @relation("solicitacoes_responsavel_usuario_idTousuarios", fields: [responsavel_usuario_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  unidades_organizacionais unidades_organizacionais @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  usuarios_solicitacoes_usuario_idTousuarios usuarios @relation("solicitacoes_usuario_idTousuarios", fields: [usuario_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model unidades_organizacionais {
@@ -74,6 +81,9 @@ model unidades_organizacionais {
   itens                  itens[]
   solicitacoes           solicitacoes[]
   usuarios               usuarios[]
+  bens                  BemPatrimonial[]
+  movimentacoes_origem  MovimentacaoBem[] @relation("OrigemBem")
+  movimentacoes_destino MovimentacaoBem[] @relation("DestinoBem")
 }
 
 model usuarios {
@@ -94,6 +104,7 @@ model usuarios {
   solicitacoes_solicitacoes_responsavel_usuario_idTousuarios solicitacoes[]            @relation("solicitacoes_responsavel_usuario_idTousuarios")
   solicitacoes_solicitacoes_usuario_idTousuarios             solicitacoes[]            @relation("solicitacoes_usuario_idTousuarios")
   unidades_organizacionais                                   unidades_organizacionais? @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  atribuicoes_bens                                           AtribuicaoTecnico[]
 }
 
 model manutencao_eletronica {
@@ -209,4 +220,69 @@ enum StatusAtendimento {
   Aguardando_Peca_Impressao_Redirecionada
   Concluido
   Cancelado
+}
+
+
+model BemPatrimonial {
+  id                Int      @id @default(autoincrement())
+  tombamento        String   @unique // Identificador SIPAC
+  descricao         String   @db.Text
+  marca             String?
+  localizacao_fisica String   // Obrigatório
+  foto_url          String?  // Opcional
+  status_atual      String   @default("Ativo") // Ativo, Inservivel, Ocioso, Transferido
+  unidade_id        Int
+  data_importacao   DateTime @default(now())
+
+  unidade           unidades_organizacionais @relation(fields: [unidade_id], references: [id])
+  atribuicoes       AtribuicaoTecnico[]
+  movimentacoes     MovimentacaoBem[]
+  conferencias      ConferenciaLevantamento[]
+}
+
+model AtribuicaoTecnico {
+  id              Int       @id @default(autoincrement())
+  bem_id          Int
+  tecnico_id      Int
+  data_atribuicao DateTime  @default(now())
+  data_devolucao  DateTime?
+  observacoes     String?   @db.Text
+  
+  bem             BemPatrimonial @relation(fields: [bem_id], references: [id])
+  tecnico         usuarios       @relation(fields: [tecnico_id], references: [id])
+}
+
+model MovimentacaoBem {
+  id                 Int       @id @default(autoincrement())
+  bem_id             Int
+  tipo               String    @db.VarChar(50) // "TRANSFERENCIA" ou "RECOLHIMENTO"
+  subtipo            String?   @db.VarChar(50) // "Inservível" ou "Ocioso"
+  origem_unidade_id  Int
+  destino_unidade_id Int?      // Unidade de destino
+  data_envio         DateTime  @default(now()) @db.Timestamptz(6)
+  data_recebimento   DateTime? @db.Timestamptz(6)
+  
+  bem                BemPatrimonial           @relation(fields: [bem_id], references: [id])
+  unidade_origem     unidades_organizacionais @relation("OrigemBem", fields: [origem_unidade_id], references: [id])
+  unidade_destino    unidades_organizacionais? @relation("DestinoBem", fields: [destino_unidade_id], references: [id])
+}
+
+model LevantamentoPatrimonial {
+  id          Int       @id @default(autoincrement())
+  data_inicio DateTime  @default(now())
+  data_fim    DateTime?
+  status      String    @default("Aberto")
+
+  conferencias ConferenciaLevantamento[]
+}
+
+model ConferenciaLevantamento {
+  id              Int      @id @default(autoincrement())
+  levantamento_id Int
+  bem_id          Int
+  status_conferido String  // "OK", "Transferido", "Nao Encontrado"
+  justificativa   String?  @db.Text // Campo para justificativa
+
+  levantamento    LevantamentoPatrimonial @relation(fields: [levantamento_id], references: [id])
+  bem             BemPatrimonial          @relation(fields: [bem_id], references: [id])
 }
