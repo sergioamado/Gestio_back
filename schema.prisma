@@ -50,17 +50,18 @@ model solicitacao_itens {
 
 model solicitacoes {
   id                      Int                 @id @default(autoincrement())
+  os                      String?             @db.VarChar(50)
   usuario_id              Int
   responsavel_usuario_id  Int
   setor_equipamento       String?             @db.VarChar(255)
-  numero_glpi             Int
-  patrimonio              String?             @db.VarChar(50)
+  numero_glpi             String?             @db.VarChar(50)
+  patrimonio              String?             @db.VarChar(50) // Equipamento em manutenção
   data_solicitacao        DateTime?           @default(now()) @db.Timestamptz(6)
   status                  String              @default("PENDENTE") @db.VarChar(50)
-  tipo_requisicao         String              @default("PEDIDO") @db.VarChar(20)
-  justificativa           String?             @db.Text
-  numero_pedido_externo   String?             @db.VarChar(100)
-  documento_emitido_em    DateTime?           @db.Timestamptz(6)
+  tipo_requisicao         String              @default("PEDIDO") @db.VarChar(20) // Novo: PEDIDO ou TESTE
+  justificativa           String?             @db.Text // Novo: Log de observações do técnico/admin
+  numero_pedido_externo   String?             @db.VarChar(100) // Novo: Rastreio de compra
+  documento_emitido_em    DateTime?           @db.Timestamptz(6) // Novo: Data de emissão de documento
   unidade_id              Int
   solicitacao_itens       solicitacao_itens[]
   usuarios_solicitacoes_responsavel_usuario_idTousuarios usuarios @relation("solicitacoes_responsavel_usuario_idTousuarios", fields: [responsavel_usuario_id], references: [id], onDelete: NoAction, onUpdate: NoAction)

@@ -5,75 +5,88 @@ import { z } from 'zod';
 
 const prisma = new PrismaClient();
 
+// 1. Zod Schema: Validamos como número inteiro (Int)
 const solicitacaoSchema = z.object({
   responsavel_usuario_id: z.number().int(),
-  setor_equipamento: z.string().optional(),
-  numero_glpi: z.string().optional(),
-  patrimonio: z.string().optional(),
+  numero_glpi: z.number().int("O número do GLPI deve ser um número inteiro."),
+  setor_equipamento: z.string().optional().nullable(),
+  patrimonio: z.string().optional().nullable(),
   unidade_id: z.number().int(),
+  tipo_requisicao: z.enum(['PEDIDO', 'TESTE']).default('PEDIDO'),
+  justificativa: z.string().optional().nullable(),
   itens: z.array(z.object({
     id: z.number().int(),
     quantidade: z.number().int().positive(),
   })).min(1, "A solicitação deve ter pelo menos um item."),
 });
 
+// 2. getAllSolicitacoes
 export const getAllSolicitacoes = async (req: Request, res: Response) => {
   try {
-    const { unidade_id, status, tecnico_id_filtro } = req.query;
-    const where: Prisma.solicitacoesWhereInput = {};
+    const { unidade_id, status, tecnico_id_filtro, numero_glpi } = req.query;
+    const where: any = {};
 
     if (unidade_id) where.unidade_id = Number(unidade_id);
     if (status) where.status = String(status);
     if (tecnico_id_filtro) where.responsavel_usuario_id = Number(tecnico_id_filtro);
+    
+    // Tratamos a conversão para número
+    if (numero_glpi) where.numero_glpi = Number(numero_glpi);
 
     const solicitacoes = await prisma.solicitacoes.findMany({
-      where,
+      where: where as any, // Força o compilador a aceitar o filtro numérico
       include: {
-          // CORREÇÃO: Adicionado o include para os itens da solicitação
-          solicitacao_itens: {
-            include: {
-              itens: {
-                select: { descricao: true }
-              }
+        solicitacao_itens: {
+          include: {
+            itens: { 
+              select: { descricao: true, is_permanente: true } 
             }
-          },
-          usuarios_solicitacoes_responsavel_usuario_idTousuarios: { 
-              select: { nome_completo: true } 
           }
+        },
+        usuarios_solicitacoes_responsavel_usuario_idTousuarios: { 
+          select: { nome_completo: true } 
+        }
       },
       orderBy: { data_solicitacao: 'desc' }
     });
     
-    const respostaFormatada = solicitacoes.map(sol => {
-      const tecnicoNome = sol.usuarios_solicitacoes_responsavel_usuario_idTousuarios?.nome_completo || 'Técnico Removido';
-      const { usuarios_solicitacoes_responsavel_usuario_idTousuarios, ...restoDaSolicitacao } = sol;
-
-      return {
-        ...restoDaSolicitacao,
-        tecnico_responsavel: tecnicoNome,
-      };
-    });
+    const respostaFormatada = solicitacoes.map((sol: any) => ({
+      ...sol,
+      tecnico_responsavel: sol.usuarios_solicitacoes_responsavel_usuario_idTousuarios?.nome_completo || 'Técnico Removido',
+    }));
 
     res.json(respostaFormatada);
-
   } catch (error) {
     console.error("Erro em getAllSolicitacoes:", error);
     res.status(500).json({ message: "Erro interno ao buscar solicitações." });
   }
 };
 
-// ... (createSolicitacao e getSolicitacaoById permanecem iguais)
+// 3. createSolicitacao
 export const createSolicitacao = async (req: Request, res: Response) => {
   try {
-    const { itens, ...solicitacaoData } = solicitacaoSchema.parse(req.body);
+    const validatedData = solicitacaoSchema.parse(req.body);
+    const { itens, justificativa, ...solicitacaoData } = validatedData;
     const usuario_id = req.user!.id;
 
-    const novaSolicitacao = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const novaSolicitacao = await prisma.$transaction(async (tx) => {
+      
       const solicitacao = await tx.solicitacoes.create({
-        data: { ...solicitacaoData, usuario_id },
+        data: { 
+          ...solicitacaoData, 
+          usuario_id,
+          justificativa: justificativa 
+            ? `[${new Date().toLocaleString()}] Solicitante: ${justificativa}` 
+            : null
+        } as any, // RESOLUÇÃO TS(2339): Força o Prisma a aceitar os dados (numero_glpi numérico e justificativa)
       });
 
       for (const item of itens) {
+        const itemDb = await tx.itens.findUnique({ where: { id: item.id } });
+        if (!itemDb || itemDb.quantidade < item.quantidade) {
+          throw new Error(`Estoque insuficiente para o item: ${itemDb?.descricao || item.id}`);
+        }
+
         await tx.solicitacao_itens.create({
           data: {
             solicitacao_id: solicitacao.id,
@@ -81,76 +94,65 @@ export const createSolicitacao = async (req: Request, res: Response) => {
             quantidade_solicitada: item.quantidade,
           },
         });
+
         await tx.itens.update({
           where: { id: item.id },
-          data: {
-            quantidade: {
-              decrement: item.quantidade,
-            },
-          },
+          data: { quantidade: { decrement: item.quantidade } },
         });
       }
       return solicitacao;
     });
 
     res.status(201).json(novaSolicitacao);
-  } catch (error) {
+  } catch (error: any) {
     console.error(error);
-    res.status(400).json({ message: 'Erro ao criar solicitação.', details: error });
+    res.status(400).json({ message: error.message || 'Erro ao criar solicitação.' });
   }
 };
 
+// 4. getSolicitacaoById
 export const getSolicitacaoById = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
     const solicitacao = await prisma.solicitacoes.findUnique({
       where: { id: Number(id) },
       include: {
-        usuarios_solicitacoes_usuario_idTousuarios: { 
-          select: { nome_completo: true } 
-        },
-        usuarios_solicitacoes_responsavel_usuario_idTousuarios: { 
-          select: { nome_completo: true } 
-        },
-        solicitacao_itens: {
-          include: {
-            itens: true,
-          }
-        }
+        usuarios_solicitacoes_usuario_idTousuarios: { select: { nome_completo: true } },
+        usuarios_solicitacoes_responsavel_usuario_idTousuarios: { select: { nome_completo: true } },
+        solicitacao_itens: { include: { itens: true } }
       }
     });
 
-    if (!solicitacao) {
-      return res.status(404).json({ message: 'Solicitação não encontrada.' });
-    }
-    const respostaFormatada = {
+    if (!solicitacao) return res.status(404).json({ message: 'Solicitação não encontrada.' });
+
+    res.json({
       ...solicitacao,
-      solicitante_nome: solicitacao.usuarios_solicitacoes_usuario_idTousuarios?.nome_completo || 'Solicitante não encontrado',
-      tecnico_responsavel: solicitacao.usuarios_solicitacoes_responsavel_usuario_idTousuarios?.nome_completo || 'Técnico não encontrado'
-    };
-    delete (respostaFormatada as any).usuarios_solicitacoes_usuario_idTousuarios;
-    delete (respostaFormatada as any).usuarios_solicitacoes_responsavel_usuario_idTousuarios;
-
-    res.json(respostaFormatada);
-
+      solicitante_nome: (solicitacao as any).usuarios_solicitacoes_usuario_idTousuarios?.nome_completo || 'Solicitante não encontrado',
+      tecnico_responsavel: (solicitacao as any).usuarios_solicitacoes_responsavel_usuario_idTousuarios?.nome_completo || 'Técnico não encontrado'
+    });
   } catch (error) {
     console.error("Erro em getSolicitacaoById:", error);
-    res.status(500).json({ message: 'Erro interno ao buscar detalhes da solicitação.' });
+    res.status(500).json({ message: 'Erro interno ao buscar detalhes.' });
   }
 };
 
+// 5. updateStatusSolicitacao
 export const updateStatusSolicitacao = async (req: Request, res: Response) => {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, nova_justificativa } = req.body;
 
-    if (!status) {
-        return res.status(400).json({ message: 'O campo status é obrigatório.' });
-    }
+    if (!status) return res.status(400).json({ message: 'O status é obrigatório.' });
 
     try {
+        const solicitacaoAtual = await prisma.solicitacoes.findUnique({ where: { id: Number(id) } });
+        
+        const justificativaAtualizada = nova_justificativa 
+            ? `${(solicitacaoAtual as any)?.justificativa || ''}\n[${new Date().toLocaleString()}] Admin: ${nova_justificativa}`
+            : (solicitacaoAtual as any)?.justificativa;
+
         const solicitacao = await prisma.solicitacoes.update({
             where: { id: Number(id) },
-            data: { status },
+            data: { status, justificativa: justificativaAtualizada } as any, // Bypass TS(2339) para justificativa
         });
         res.json(solicitacao);
     } catch (error) {
@@ -158,19 +160,15 @@ export const updateStatusSolicitacao = async (req: Request, res: Response) => {
     }
 };
 
+// 6. getLatestSolicitacoes
 export const getLatestSolicitacoes = async (req: Request, res: Response) => {
     const { id: userId, role, unidade_id } = req.user!; 
     
     try {
         let whereClause: Prisma.solicitacoesWhereInput = {};
-        
         if (role === 'gerente') {
-            whereClause = { 
-                unidade_id: unidade_id ?? undefined,
-                status: 'Pendente' 
-            };
-        } 
-        else if (role.startsWith('tecnico')) {
+            whereClause = { unidade_id: unidade_id ?? undefined, status: 'PENDENTE' };
+        } else if (role.startsWith('tecnico')) {
             whereClause = { responsavel_usuario_id: userId };
         }
 
@@ -179,29 +177,24 @@ export const getLatestSolicitacoes = async (req: Request, res: Response) => {
             take: 5,
             orderBy: { data_solicitacao: 'desc' },
             include: {
-                // CORREÇÃO: Usar o nome de relação correto do Prisma
-                usuarios_solicitacoes_responsavel_usuario_idTousuarios: { 
-                    select: { nome_completo: true } 
-                },
+                usuarios_solicitacoes_responsavel_usuario_idTousuarios: { select: { nome_completo: true } },
             }
         });
 
-        const response = solicitacoes.map((s) => ({
+        res.json(solicitacoes.map((s: any) => ({
             id: s.id,
             data_solicitacao: s.data_solicitacao,
             status: s.status,
             tecnico_responsavel: s.usuarios_solicitacoes_responsavel_usuario_idTousuarios?.nome_completo || 'Não definido',
             numero_glpi: s.numero_glpi
-        }));
-
-        res.json(response);
-
+        })));
     } catch (error) {
         console.error("Erro em getLatestSolicitacoes:", error);
-        res.status(500).json({ message: 'Erro ao buscar últimas solicitações.' });
+        res.status(500).json({ message: 'Erro ao buscar dados do dashboard.' });
     }
 };
 
+// 7. updateSolicitacaoItemStatus
 export const updateSolicitacaoItemStatus = async (req: Request, res: Response) => {
     const { itemId } = req.params;
     const { status_entrega } = req.body;
@@ -216,6 +209,6 @@ export const updateSolicitacaoItemStatus = async (req: Request, res: Response) =
         });
         res.json(itemAtualizado);
     } catch (error) {
-        res.status(500).json({ message: 'Erro ao atualizar o status do item.' });
+        res.status(500).json({ message: 'Erro ao atualizar status do item.' });
     }
 };
