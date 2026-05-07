@@ -94,6 +94,7 @@ model usuarios {
   role                                                       String                    @db.VarChar(50)
   telefone                                                   String?                   @db.VarChar(20)
   email                                                      String?                   @unique @db.VarChar(255)
+  telegram_chat_id                                           String?                   @db.VarChar(50)
   unidade_id                                                 Int?
   data_criacao                                               DateTime?                 @default(now()) @db.Timestamptz(6)
   atendimentos_criados                                       AtendimentoImpressora[]

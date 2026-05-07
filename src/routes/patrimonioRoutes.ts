@@ -1,15 +1,31 @@
+// src/routes/patrimonioRoutes.ts
 import { Router } from 'express';
-import multer from 'multer';
-import { importarSipac, conferirTombamento } from '../controllers/patimonioController';
-import { authMiddleware, adminOnlyMiddleware } from '../middlewares/authMiddleware';
+import {
+  getAllBens,
+  transferirBens,
+  importarDadosSipac,
+  registrarConferencia
+} from '../controllers/patrimonioController';
+import { authMiddleware, managerOrAdminMiddleware } from '../middlewares/authMiddleware';
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage() });
 
+// Protege todas as rotas exigindo token válido
 router.use(authMiddleware);
 
-// Apenas Admin e Gerente podem importar
-router.post('/importar', adminOnlyMiddleware, upload.single('file'), importarSipac);
-router.post('/conferir', conferirTombamento);
+// Restringe o acesso apenas para admin e gerente
+router.use(managerOrAdminMiddleware);
+
+// Rota para listar bens (aceita query params: ?unidade_id=X & busca=Y)
+router.get('/', getAllBens);
+
+// Rota para registrar transferência de bens entre unidades
+router.post('/transferencia', transferirBens);
+
+// Rota para importar a lista de bens extraída do SIPAC (PDF)
+router.post('/importar', importarDadosSipac);
+
+// Rota para registrar um item conferido no levantamento
+router.post('/conferencia', registrarConferencia);
 
 export default router;

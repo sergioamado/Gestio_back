@@ -5,7 +5,6 @@ import { z } from 'zod';
 
 const prisma = new PrismaClient();
 
-// 1. Zod Schema: Validamos como número inteiro (Int)
 const solicitacaoSchema = z.object({
   responsavel_usuario_id: z.number().int(),
   numero_glpi: z.number().int("O número do GLPI deve ser um número inteiro."),
@@ -20,7 +19,6 @@ const solicitacaoSchema = z.object({
   })).min(1, "A solicitação deve ter pelo menos um item."),
 });
 
-// 2. getAllSolicitacoes
 export const getAllSolicitacoes = async (req: Request, res: Response) => {
   try {
     const { unidade_id, status, tecnico_id_filtro, numero_glpi } = req.query;
@@ -30,11 +28,10 @@ export const getAllSolicitacoes = async (req: Request, res: Response) => {
     if (status) where.status = String(status);
     if (tecnico_id_filtro) where.responsavel_usuario_id = Number(tecnico_id_filtro);
     
-    // Tratamos a conversão para número
     if (numero_glpi) where.numero_glpi = Number(numero_glpi);
 
     const solicitacoes = await prisma.solicitacoes.findMany({
-      where: where as any, // Força o compilador a aceitar o filtro numérico
+      where: where as any, 
       include: {
         solicitacao_itens: {
           include: {
@@ -62,7 +59,6 @@ export const getAllSolicitacoes = async (req: Request, res: Response) => {
   }
 };
 
-// 3. createSolicitacao
 export const createSolicitacao = async (req: Request, res: Response) => {
   try {
     const validatedData = solicitacaoSchema.parse(req.body);
@@ -72,14 +68,19 @@ export const createSolicitacao = async (req: Request, res: Response) => {
     const novaSolicitacao = await prisma.$transaction(async (tx) => {
       
       const solicitacao = await tx.solicitacoes.create({
-        data: { 
-          ...solicitacaoData, 
-          usuario_id,
-          justificativa: justificativa 
-            ? `[${new Date().toLocaleString()}] Solicitante: ${justificativa}` 
-            : null
-        } as any, // RESOLUÇÃO TS(2339): Força o Prisma a aceitar os dados (numero_glpi numérico e justificativa)
-      });
+         data: {
+           responsavel_usuario_id: validatedData.responsavel_usuario_id,
+           
+           numero_glpi: String(validatedData.numero_glpi), 
+           
+           setor_equipamento: validatedData.setor_equipamento,
+           patrimonio: validatedData.patrimonio,
+           unidade_id: validatedData.unidade_id,
+           tipo_requisicao: validatedData.tipo_requisicao,
+           usuario_id: validatedData.responsavel_usuario_id,
+           justificativa: validatedData.justificativa
+         }
+       });
 
       for (const item of itens) {
         const itemDb = await tx.itens.findUnique({ where: { id: item.id } });
@@ -110,7 +111,7 @@ export const createSolicitacao = async (req: Request, res: Response) => {
   }
 };
 
-// 4. getSolicitacaoById
+
 export const getSolicitacaoById = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
@@ -136,7 +137,7 @@ export const getSolicitacaoById = async (req: Request, res: Response) => {
   }
 };
 
-// 5. updateStatusSolicitacao
+
 export const updateStatusSolicitacao = async (req: Request, res: Response) => {
     const { id } = req.params;
     const { status, nova_justificativa } = req.body;
@@ -160,7 +161,7 @@ export const updateStatusSolicitacao = async (req: Request, res: Response) => {
     }
 };
 
-// 6. getLatestSolicitacoes
+
 export const getLatestSolicitacoes = async (req: Request, res: Response) => {
     const { id: userId, role, unidade_id } = req.user!; 
     
@@ -194,21 +195,42 @@ export const getLatestSolicitacoes = async (req: Request, res: Response) => {
     }
 };
 
-// 7. updateSolicitacaoItemStatus
+
 export const updateSolicitacaoItemStatus = async (req: Request, res: Response) => {
     const { itemId } = req.params;
     const { status_entrega } = req.body;
 
     try {
-        const itemAtualizado = await prisma.solicitacao_itens.update({
-            where: { id: Number(itemId) },
-            data: { 
-                status_entrega,
-                data_entrega: status_entrega === 'Entregue' ? new Date() : null
-            },
+        const solicitacaoItem = await prisma.solicitacao_itens.findUnique({
+            where: { id: Number(itemId) }
         });
-        res.json(itemAtualizado);
+
+        if (!solicitacaoItem) {
+            return res.status(404).json({ message: 'Item da solicitação não encontrado.' });
+        }
+
+        const resultado = await prisma.$transaction(async (tx) => {
+            const itemAtualizado = await tx.solicitacao_itens.update({
+                where: { id: Number(itemId) },
+                data: { 
+                    status_entrega,
+                    data_entrega: status_entrega === 'Entregue' ? new Date() : solicitacaoItem.data_entrega
+                },
+            });
+
+            if (status_entrega === 'Devolvido' && solicitacaoItem.status_entrega !== 'Devolvido') {
+                await tx.itens.update({
+                    where: { id: solicitacaoItem.item_id },
+                    data: { quantidade: { increment: solicitacaoItem.quantidade_solicitada } }
+                });
+            }
+
+            return itemAtualizado;
+        });
+
+        res.json(resultado);
     } catch (error) {
+        console.error("Erro em updateSolicitacaoItemStatus:", error);
         res.status(500).json({ message: 'Erro ao atualizar status do item.' });
     }
 };
