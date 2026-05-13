@@ -9,10 +9,12 @@ import solicitacaoRoutes from './routes/solicitacaoRoutes';
 import relatorioRoutes from './routes/relatorioRoutes';
 import manutencaoEletronicaRoutes from './routes/manutencaoEletronicaRoutes';
 import impressoraRoutes from './routes/impressoraRoutes';
-import path from 'path';
-import fs from 'fs';
 import notificacaoRoutes from './routes/notificacaoRoutes';
 import estatisticasRoutes from './routes/estatisticasRoutes';
+import patrimonioRoutes from './routes/patrimonioRoutes'; 
+
+import path from 'path';
+import fs from 'fs';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -30,10 +32,12 @@ app.use('/api/solicitacoes', solicitacaoRoutes);
 app.use('/api/relatorios', relatorioRoutes);
 app.use('/api/manutencao-eletronica', manutencaoEletronicaRoutes);
 app.use('/api/gestao-impressoras', impressoraRoutes);
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 app.use('/api/notificacoes', notificacaoRoutes);
 app.use('/api/estatisticas', estatisticasRoutes);
-app.use('/api/relatorios', relatorioRoutes);
+app.use('/api/patrimonio', patrimonioRoutes);
+
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+
 const uploadDir = './uploads/patrimonio';
 if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });

@@ -13,6 +13,7 @@ model itens {
   codigo_ref        String?             @db.VarChar(50) // Novo: Código de referência interno
   pregao            String?             @db.VarChar(100)
   descricao         String
+  quantidade_com_defeito Int            @default(0)
   tipo              String?             @db.VarChar(100)
   unidade_medida    String              @default("UND") @db.VarChar(20)
   localizacao       String?             @db.VarChar(100)

@@ -1,6 +1,7 @@
 // src/routes/solicitacaoRoutes.ts
 import { Router } from 'express';
-import { getAllSolicitacoes, createSolicitacao, getSolicitacaoById, updateStatusSolicitacao, getLatestSolicitacoes, updateSolicitacaoItemStatus } from '../controllers/solicitacaoController';
+import { getAllSolicitacoes, createSolicitacao, getSolicitacaoById, updateStatusSolicitacao, getLatestSolicitacoes, updateSolicitacaoItemStatus, cancelarItemSolicitacao, 
+  sinalizarDefeitoItem } from '../controllers/solicitacaoController';
 import { authMiddleware, blockManagerMiddleware } from '../middlewares/authMiddleware';
 
 const router = Router();
@@ -14,5 +15,7 @@ router.get('/latest', getLatestSolicitacoes);
 router.get('/:id', getSolicitacaoById);
 router.patch('/:id/status', updateStatusSolicitacao); 
 router.patch('/item/:itemId/status', updateSolicitacaoItemStatus);
+router.put('/itens/:itemId/cancelar', cancelarItemSolicitacao);
+router.put('/itens/:itemId/defeito', sinalizarDefeitoItem);
 
 export default router;

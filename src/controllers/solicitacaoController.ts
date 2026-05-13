@@ -201,11 +201,11 @@ export const updateSolicitacaoItemStatus = async (req: Request, res: Response) =
     const { status_entrega } = req.body;
 
     try {
-        const solicitacaoItem = await prisma.solicitacao_itens.findUnique({
+        const solicitacao_itens = await prisma.solicitacao_itens.findUnique({
             where: { id: Number(itemId) }
         });
 
-        if (!solicitacaoItem) {
+        if (!solicitacao_itens) {
             return res.status(404).json({ message: 'Item da solicitação não encontrado.' });
         }
 
@@ -214,14 +214,14 @@ export const updateSolicitacaoItemStatus = async (req: Request, res: Response) =
                 where: { id: Number(itemId) },
                 data: { 
                     status_entrega,
-                    data_entrega: status_entrega === 'Entregue' ? new Date() : solicitacaoItem.data_entrega
+                    data_entrega: status_entrega === 'Entregue' ? new Date() : solicitacao_itens.data_entrega
                 },
             });
 
-            if (status_entrega === 'Devolvido' && solicitacaoItem.status_entrega !== 'Devolvido') {
+            if (status_entrega === 'Devolvido' && solicitacao_itens.status_entrega !== 'Devolvido') {
                 await tx.itens.update({
-                    where: { id: solicitacaoItem.item_id },
-                    data: { quantidade: { increment: solicitacaoItem.quantidade_solicitada } }
+                    where: { id: solicitacao_itens.item_id },
+                    data: { quantidade: { increment: solicitacao_itens.quantidade_solicitada } }
                 });
             }
 
@@ -233,4 +233,59 @@ export const updateSolicitacaoItemStatus = async (req: Request, res: Response) =
         console.error("Erro em updateSolicitacaoItemStatus:", error);
         res.status(500).json({ message: 'Erro ao atualizar status do item.' });
     }
+};
+
+
+export const cancelarItemSolicitacao = async (req: Request, res: Response) => {
+  const { itemId } = req.params;
+
+  try {
+    const solicitacao_itens = await prisma.solicitacao_itens.findUnique({
+      where: { id: Number(itemId) }
+    });
+
+    if (!solicitacao_itens) return res.status(404).json({ message: "Item da solicitação não encontrado." });
+
+    // 2. Muda o status para Cancelado
+    await prisma.solicitacao_itens.update({
+      where: { id: Number(itemId) },
+      data: { status_entrega: 'Cancelado' }
+    });
+
+    await prisma.itens.update({
+      where: { id: solicitacao_itens.item_id },
+      data: { quantidade: { increment: solicitacao_itens.quantidade_solicitada } }
+    });
+
+    return res.status(200).json({ message: "Item cancelado e estoque restaurado." });
+  } catch (error) {
+    return res.status(500).json({ message: "Erro ao cancelar item." });
+  }
+};
+
+export const sinalizarDefeitoItem = async (req: Request, res: Response) => {
+  const { itemId } = req.params;
+
+  try {
+    const solicitacao_itens = await prisma.solicitacao_itens.findUnique({
+      where: { id: Number(itemId) }
+    });
+
+    if (!solicitacao_itens) return res.status(404).json({ message: "Item não encontrado." });
+
+    // 1. Muda o status para Defeito
+    await prisma.solicitacao_itens.update({
+      where: { id: Number(itemId) },
+      data: { status_entrega: 'Defeito' }
+    });
+
+    await prisma.itens.update({
+      where: { id: solicitacao_itens.item_id },
+      data: { quantidade: { increment: solicitacao_itens.quantidade_solicitada } }
+    });
+
+    return res.status(200).json({ message: "Peça registrada como defeituosa." });
+  } catch (error) {
+    return res.status(500).json({ message: "Erro ao registrar defeito." });
+  }
 };
