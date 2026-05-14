@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { z } from 'zod';
 
+
 const prisma = new PrismaClient();
 
 const solicitacaoSchema = z.object({
@@ -21,38 +22,54 @@ const solicitacaoSchema = z.object({
 
 export const getAllSolicitacoes = async (req: Request, res: Response) => {
   try {
-    const { unidade_id, status, tecnico_id_filtro, numero_glpi } = req.query;
+    
+    const { unidade_id, status, tecnico_id_filtro, numero_glpi, page = 1, limit = 10 } = req.query;
     const where: any = {};
 
     if (unidade_id) where.unidade_id = Number(unidade_id);
     if (status) where.status = String(status);
     if (tecnico_id_filtro) where.responsavel_usuario_id = Number(tecnico_id_filtro);
-    
     if (numero_glpi) where.numero_glpi = Number(numero_glpi);
 
-    const solicitacoes = await prisma.solicitacoes.findMany({
-      where: where as any, 
-      include: {
-        solicitacao_itens: {
-          include: {
-            itens: { 
-              select: { descricao: true, is_permanente: true } 
+  
+    const skip = (Number(page) - 1) * Number(limit);
+    const take = Number(limit);
+
+    
+    const [solicitacoes, total] = await Promise.all([
+      prisma.solicitacoes.findMany({
+        where: where as any, 
+        skip,
+        take,
+        include: {
+          solicitacao_itens: {
+            include: {
+              itens: { select: { descricao: true, is_permanente: true } }
             }
+          },
+          usuarios_solicitacoes_responsavel_usuario_idTousuarios: { 
+            select: { nome_completo: true } 
           }
         },
-        usuarios_solicitacoes_responsavel_usuario_idTousuarios: { 
-          select: { nome_completo: true } 
-        }
-      },
-      orderBy: { data_solicitacao: 'desc' }
-    });
+        orderBy: { data_solicitacao: 'desc' }
+      }),
+      prisma.solicitacoes.count({ where: where as any })
+    ]);
     
     const respostaFormatada = solicitacoes.map((sol: any) => ({
       ...sol,
       tecnico_responsavel: sol.usuarios_solicitacoes_responsavel_usuario_idTousuarios?.nome_completo || 'Técnico Removido',
     }));
 
-    res.json(respostaFormatada);
+    res.json({
+      data: respostaFormatada,
+      meta: {
+        total,
+        page: Number(page),
+        limit: Number(limit),
+        totalPages: Math.ceil(total / Number(limit))
+      }
+    });
   } catch (error) {
     console.error("Erro em getAllSolicitacoes:", error);
     res.status(500).json({ message: "Erro interno ao buscar solicitações." });

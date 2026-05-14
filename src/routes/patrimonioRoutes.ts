@@ -4,9 +4,11 @@ import {
   getAllBens,
   transferirBens,
   importarDadosSipac,
-  registrarConferencia
+  registrarConferencia,
+  uploadFoto
 } from '../controllers/patrimonioController';
 import { authMiddleware, managerOrAdminMiddleware } from '../middlewares/authMiddleware';
+import upload from '../middlewares/uploadMiddleware';
 
 const router = Router();
 
@@ -27,5 +29,11 @@ router.post('/importar', importarDadosSipac);
 
 // Rota para registrar um item conferido no levantamento
 router.post('/conferencia', registrarConferencia);
+
+// Rota para importar planilha: espera um campo chamado 'planilha'
+router.post('/importar', upload.single('planilha'), importarDadosSipac);
+
+// Rota para upload de foto: espera um campo chamado 'foto' e o ID no parâmetro
+router.post('/:id/foto', upload.single('foto'), uploadFoto);
 
 export default router;

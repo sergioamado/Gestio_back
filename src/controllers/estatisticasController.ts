@@ -5,39 +5,54 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 export const getDashboardStats = async (req: Request, res: Response) => {
-  const { role, unidade_id } = req.user!;
+  const { id: userId, role, unidade_id } = req.user!;
 
   try {
-    // Busca paralela para máxima performance (Promise.all)
+    // 1. Regra de Filtro Inteligente baseada no Cargo (Role)
+    let whereOS: any = {};
+    let whereEstoque: any = {};
+
+    if (role === 'gerente' && unidade_id) {
+        whereOS = { unidade_id };
+        whereEstoque = { unidade_id };
+    } else if (role.startsWith('tecnico')) {
+        whereOS = { responsavel_usuario_id: userId }; // Técnico só vê as próprias OS
+        if (unidade_id) whereEstoque = { unidade_id }; // Mas vê o estoque da unidade toda
+    }
+
+    // 2. Busca Paralela de Alta Performance
     const [
       totalOS_Pendentes,
       itensBaixoEstoque,
-      totalBensAtivos
+      totalBensAtivos,
+      osPorStatus
     ] = await Promise.all([
-      // 1. Conta quantas OS estão pendentes (Se for gerente, filtra pela unidade dele)
       prisma.solicitacoes.count({
-        where: {
-          status: 'PENDENTE',
-          ...(role === 'gerente' && unidade_id ? { unidade_id } : {})
-        }
+        where: { status: 'PENDENTE', ...whereOS }
       }),
-      // 2. Conta quantos itens estão com o estoque menor que 5
       prisma.itens.count({
-        where: {
-          quantidade: { lt: 5 },
-          ...(role === 'gerente' && unidade_id ? { unidade_id } : {})
-        }
+        where: { quantidade: { lt: 5 }, ...whereEstoque }
       }),
-      // 3. Conta o total de bens patrimoniais ativos (Apenas uma visão geral)
       prisma.bemPatrimonial.count({
-        where: { status_atual: 'Ativo' } // Ajuste o status conforme o seu schema
+        where: { status_atual: 'Ativo' } 
+      }),
+      prisma.solicitacoes.groupBy({
+        by: ['status'],
+        _count: { status: true },
+        where: whereOS
       })
     ]);
+
+    const grafico_status = osPorStatus.map(item => ({
+      name: item.status,
+      quantidade: item._count.status
+    }));
 
     res.json({
       os_pendentes: totalOS_Pendentes,
       baixo_estoque: itensBaixoEstoque,
-      patrimonio_ativo: totalBensAtivos
+      patrimonio_ativo: totalBensAtivos,
+      grafico_status 
     });
 
   } catch (error) {

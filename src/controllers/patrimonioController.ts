@@ -126,3 +126,24 @@ export const registrarConferencia = async (req: Request, res: Response) => {
         res.status(500).json({ message: 'Erro ao registrar conferência.' });
     }
 };
+
+// Exemplo de como capturar o caminho no patrimonioController.ts
+export const uploadFoto = async (req: Request, res: Response) => {
+  const { id } = req.params;
+  
+  if (!req.file) {
+    return res.status(400).json({ message: 'Nenhum ficheiro enviado.' });
+  }
+
+  const caminhoRelativo = req.file.path.replace(/\\/g, '/'); // Normaliza barras para Windows/Linux
+
+  try {
+    await prisma.bemPatrimonial.update({
+      where: { id: Number(id) },
+      data: { foto_url: caminhoRelativo }
+    });
+    res.json({ message: 'Foto atualizada!', url: caminhoRelativo });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao guardar caminho da foto.' });
+  }
+};

@@ -103,6 +103,7 @@ model usuarios {
   impressoes_fora_unidade                                    ImpressaoForaUnidade[]
   manutencoes_eletronicas                                    manutencao_eletronica[]
   notificacoes                                               notificacoes[]
+  preferencias_notificacao                                   Json?
   solicitacoes_solicitacoes_responsavel_usuario_idTousuarios solicitacoes[]            @relation("solicitacoes_responsavel_usuario_idTousuarios")
   solicitacoes_solicitacoes_usuario_idTousuarios             solicitacoes[]            @relation("solicitacoes_usuario_idTousuarios")
   unidades_organizacionais                                   unidades_organizacionais? @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -287,4 +288,19 @@ model ConferenciaLevantamento {
 
   levantamento    LevantamentoPatrimonial @relation(fields: [levantamento_id], references: [id])
   bem             BemPatrimonial          @relation(fields: [bem_id], references: [id])
+}
+
+model notificacoes {
+  id           Int      @id @default(autoincrement())
+  usuario_id   Int
+  titulo       String   @db.VarChar(255)
+  mensagem     String   @db.Text
+  tipo         String   @default("SISTEMA") // OS, ESTOQUE, ALERTA, SISTEMA
+  lida         Boolean  @default(false)
+  data_criacao DateTime @default(now()) @db.Timestamptz(6)
+
+  // Relacionamento com o usuário
+  usuario      usuarios @relation(fields: [usuario_id], references: [id], onDelete: Cascade)
+
+  @@index([usuario_id])
 }

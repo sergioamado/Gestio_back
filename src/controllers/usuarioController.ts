@@ -16,6 +16,7 @@ const usuarioSchema = z.object({
   password: z.string().min(6, "A senha deve ter no mínimo 6 caracteres"),
 });
 
+
 export const getAllUsers = async (req: Request, res: Response) => {
   const { role, unidade_id, role_type } = req.query;
 
@@ -145,5 +146,28 @@ export const resetPasswordByAdmin = async (req: Request, res: Response) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Erro interno no servidor ao tentar alterar a senha.' });
+  }
+};
+
+export const salvarPreferenciasNotificacao = async (req: Request, res: Response) => {
+  const { telegram_chat_id, prefs_navegador, prefs_telegram } = req.body;
+  const usuario_id = req.user!.id;
+
+  try {
+    await (prisma.usuarios as any).update({
+      where: { id: usuario_id },
+      data: { 
+        telegram_chat_id,
+        preferencias_notificacao: {
+          navegador: prefs_navegador,
+          telegram: prefs_telegram
+        }
+      }
+    });
+
+    res.status(200).json({ message: "Preferências salvas!" });
+  } catch (error) {
+    console.error("Erro ao salvar:", error);
+    res.status(500).json({ message: "Erro ao salvar preferências." });
   }
 };
