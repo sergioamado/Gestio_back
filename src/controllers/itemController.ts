@@ -17,27 +17,57 @@ const itemSchema = z.object({
   quantidade: z.number().int().min(0),
   preco_unitario: z.number().min(0),
   unidade_id: z.number().int(),
-  is_permanente: z.boolean().default(false), // Novo: Define se o item exige devolução
-  patrimonio_item: z.string().optional().nullable(), // Novo: Para peças com património único
+  is_permanente: z.boolean().default(false), 
+  patrimonio_item: z.string().optional().nullable(), 
 });
 
 // Listar todos os itens (com filtro opcional por unidade)
 export const getAllItems = async (req: Request, res: Response) => {
-  const { unidadeId } = req.query;
   try {
-    const items = await prisma.itens.findMany({
-      where: {
-        unidade_id: unidadeId ? Number(unidadeId) : undefined,
-      },
-      include: {
-        unidades_organizacionais: {
-          select: { nome: true },
-        },
-      },
-      orderBy: { descricao: 'asc' },
+    const { search, unidade_id, is_permanente, page = 1, limit = 10 } = req.query;
+    const where: any = {};
+
+    if (search) {
+      where.OR = [
+        { descricao: { contains: String(search), mode: 'insensitive' } },
+        { codigo_sipac: { contains: String(search) } }
+      ];
+    }
+    if (unidade_id) where.unidade_id = Number(unidade_id);
+    if (is_permanente !== undefined) where.is_permanente = is_permanente === 'true';
+
+    // Cálculo da paginação
+    const skip = (Number(page) - 1) * Number(limit);
+    const take = Number(limit);
+
+    // Busca e contagem simultâneas
+    const [itens, total] = await Promise.all([
+      prisma.itens.findMany({
+        where,
+        skip,
+        take,
+        include: { unidades_organizacionais: { select: { nome: true } } },
+        orderBy: { descricao: 'asc' }
+      }),
+      prisma.itens.count({ where })
+    ]);
+
+    const respostaFormatada = itens.map((item: any) => ({
+      ...item,
+      unidade_nome: item.unidades_organizacionais?.nome || 'Geral'
+    }));
+
+    res.json({
+      data: respostaFormatada,
+      meta: {
+        total,
+        page: Number(page),
+        limit: Number(limit),
+        totalPages: Math.ceil(total / Number(limit))
+      }
     });
-    res.json(items);
   } catch (error) {
+    console.error("Erro em getAllItens:", error);
     res.status(500).json({ message: 'Erro ao buscar itens.' });
   }
 };

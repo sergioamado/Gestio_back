@@ -5,7 +5,9 @@ import {
   transferirBens,
   importarDadosSipac,
   registrarConferencia,
-  uploadFoto
+  uploadFoto,
+  atribuirBem,
+  devolverBem
 } from '../controllers/patrimonioController';
 import { authMiddleware, managerOrAdminMiddleware } from '../middlewares/authMiddleware';
 import upload from '../middlewares/uploadMiddleware';
@@ -25,7 +27,7 @@ router.get('/', getAllBens);
 router.post('/transferencia', transferirBens);
 
 // Rota para importar a lista de bens extraída do SIPAC (PDF)
-router.post('/importar', importarDadosSipac);
+router.post('/processar-pdf', managerOrAdminMiddleware, upload.single('planilha'), importarDadosSipac);
 
 // Rota para registrar um item conferido no levantamento
 router.post('/conferencia', registrarConferencia);
@@ -35,5 +37,8 @@ router.post('/importar', upload.single('planilha'), importarDadosSipac);
 
 // Rota para upload de foto: espera um campo chamado 'foto' e o ID no parâmetro
 router.post('/:id/foto', upload.single('foto'), uploadFoto);
+
+router.post('/atribuir', managerOrAdminMiddleware, atribuirBem);
+router.post('/devolver', managerOrAdminMiddleware, devolverBem);
 
 export default router;
