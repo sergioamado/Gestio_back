@@ -285,7 +285,7 @@ export const transferirBens = async (req: Request, res: Response) => {
 
 export const uploadFoto = async (req: Request, res: Response) => {
   const { id } = req.params;
-  if (!req.file) return res.status(400).json({ message: 'Nenhum ficheiro enviado.' });
+  if (!req.file) return res.status(400).json({ message: 'Nenhum arquivo enviado.' });
   const caminhoRelativo = req.file.path.replace(/\\/g, '/'); 
   try {
     await prisma.bemPatrimonial.update({ where: { id: Number(id) }, data: { foto_url: caminhoRelativo } });
@@ -333,5 +333,143 @@ export const devolverBem = async (req: Request, res: Response) => {
     res.status(200).json({ message: "Equipamento devolvido ao inventário geral." });
   } catch (error) {
     res.status(500).json({ message: "Erro ao registrar a devolução." });
+  }
+};
+
+export const getHistoricoBem = async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  try {
+    const movimentacoes = await prisma.movimentacaoBem.findMany({
+      where: { bem_id: Number(id) },
+      include: {
+        unidade_origem: { select: { nome: true } },
+        unidade_destino: { select: { nome: true } }
+      },
+      orderBy: { data_envio: 'desc' }
+    });
+
+    res.status(200).json(movimentacoes);
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao buscar o histórico de movimentações.' });
+  }
+};
+
+export const iniciarLevantamento = async (req: Request, res: Response) => {
+  try {
+    // Verifica se já existe um levantamento em aberto
+    const aberto = await prisma.levantamentoPatrimonial.findFirst({
+      where: { status: 'Aberto' }
+    });
+
+    if (aberto) {
+      return res.status(400).json({ message: 'Já existe um levantamento em aberto. Finalize-o antes de iniciar outro.' });
+    }
+
+    const novoLevantamento = await prisma.levantamentoPatrimonial.create({
+      data: { status: 'Aberto' }
+    });
+
+    res.status(201).json({ message: 'Levantamento iniciado com sucesso!', data: novoLevantamento });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao iniciar o levantamento.' });
+  }
+};
+
+export const getLevantamentoAtual = async (req: Request, res: Response) => {
+  const { unidade_id } = req.query;
+
+  try {
+    const levantamento = await prisma.levantamentoPatrimonial.findFirst({
+      where: { status: 'Aberto' },
+      include: { conferencias: true }
+    });
+
+    if (!levantamento) return res.json(null);
+
+    // Busca todos os bens que deveriam estar nesta unidade
+    const bensDaUnidade = await prisma.bemPatrimonial.findMany({
+      where: { unidade_id: Number(unidade_id), status_atual: 'Ativo' },
+      include: {
+        atribuicoes: { where: { data_devolucao: null }, include: { tecnico: true } }
+      }
+    });
+
+    // Filtra quais já foram conferidos neste levantamento
+    const conferidosIds = levantamento.conferencias.map(c => c.bem_id);
+    
+    const pendentes = bensDaUnidade.filter(b => !conferidosIds.includes(b.id));
+    const conferidos = bensDaUnidade.filter(b => conferidosIds.includes(b.id));
+
+    res.json({
+      levantamento,
+      resumo: {
+        total: bensDaUnidade.length,
+        conferidos_qtd: conferidos.length,
+        pendentes_qtd: pendentes.length
+      },
+      pendentes,
+      conferidos
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao buscar dados do levantamento.' });
+  }
+};
+
+export const biparItemLevantamento = async (req: Request, res: Response) => {
+  const { tombamento, unidade_id } = req.body;
+
+  try {
+    const levantamento = await prisma.levantamentoPatrimonial.findFirst({ where: { status: 'Aberto' } });
+    if (!levantamento) return res.status(400).json({ message: 'Nenhum levantamento em aberto.' });
+
+    // Procura o bem no banco pelo tombamento digitado/bipado
+    const bem = await prisma.bemPatrimonial.findUnique({ where: { tombamento } });
+    if (!bem) return res.status(404).json({ message: 'Equipamento não encontrado no sistema.' });
+
+    // Verifica se o bem já foi bipado neste levantamento
+    const jaConferido = await prisma.conferenciaLevantamento.findFirst({
+      where: { levantamento_id: levantamento.id, bem_id: bem.id }
+    });
+    if (jaConferido) return res.status(400).json({ message: 'Este item já foi conferido!' });
+
+    // Verifica se o bem pertence a outra unidade (Alerta de Inconsistência)
+    let statusConferencia = 'OK';
+    let justificativa = '';
+    
+    if (bem.unidade_id !== Number(unidade_id)) {
+      statusConferencia = 'Inconsistente';
+      justificativa = 'Item bipado nesta unidade, mas o sistema indica que ele pertence a outra unidade.';
+    }
+
+    const conferencia = await prisma.conferenciaLevantamento.create({
+      data: {
+        levantamento_id: levantamento.id,
+        bem_id: bem.id,
+        status_conferido: statusConferencia,
+        justificativa
+      },
+      include: { bem: true }
+    });
+
+    res.status(200).json({ message: 'Item conferido com sucesso!', data: conferencia });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao registrar conferência.' });
+  }
+};
+
+export const finalizarLevantamento = async (req: Request, res: Response) => {
+  try {
+    const levantamento = await prisma.levantamentoPatrimonial.findFirst({ where: { status: 'Aberto' } });
+    if (!levantamento) return res.status(400).json({ message: 'Nenhum levantamento em aberto para finalizar.' });
+
+    await prisma.levantamentoPatrimonial.update({
+      where: { id: levantamento.id },
+      data: { status: 'Concluido', data_fim: new Date() }
+    });
+
+    res.status(200).json({ message: 'Levantamento finalizado e bloqueado com sucesso!' });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao finalizar levantamento.' });
   }
 };

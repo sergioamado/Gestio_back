@@ -10,7 +10,12 @@ import {
   atribuirBem,
   devolverBem,
   registrarConferencia,
-  uploadFoto
+  uploadFoto,
+  getHistoricoBem,
+  iniciarLevantamento,
+  getLevantamentoAtual,
+  biparItemLevantamento,
+  finalizarLevantamento
 } from '../controllers/patrimonioController';
 import { authMiddleware, managerOrAdminMiddleware } from '../middlewares/authMiddleware';
 import upload from '../middlewares/uploadMiddleware';
@@ -38,7 +43,14 @@ router.post('/transferencia', transferirBens);
 router.post('/atribuir', atribuirBem);
 router.post('/devolver', devolverBem);
 
-//  Levantamento Anual (Auditoria)
-router.post('/conferencia', registrarConferencia);
+
+// Histórico de Movimentações dos bens
+router.get('/:id/historico', getHistoricoBem);
+
+// Levantamento Anual (Auditoria)
+router.post('/levantamento/iniciar', iniciarLevantamento);
+router.get('/levantamento/atual', getLevantamentoAtual);
+router.post('/levantamento/bipar', biparItemLevantamento);
+router.post('/levantamento/finalizar', finalizarLevantamento);
 
 export default router;
