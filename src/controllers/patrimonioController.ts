@@ -5,6 +5,7 @@ import fs from 'fs';
 import { z } from 'zod';
 const xlsx = require('xlsx');
 const pdfParse = require('pdf-parse');
+import { dispararNotificacao } from './notificacaoController';
 
 const prisma = new PrismaClient();
 
@@ -307,32 +308,82 @@ export const registrarConferencia = async (req: Request, res: Response) => {
     }
 };
 
+// Termos de Cautela (Atribuições)
 export const atribuirBem = async (req: Request, res: Response) => {
   const { bem_id, tecnico_id, observacoes } = req.body;
+
   try {
-    await prisma.atribuicaoTecnico.updateMany({
-      where: { bem_id: Number(bem_id), data_devolucao: null },
-      data: { data_devolucao: new Date() }
+    const bem = await prisma.bemPatrimonial.findUnique({ where: { id: Number(bem_id) } });
+    if (!bem) return res.status(404).json({ message: 'Bem não encontrado.' });
+
+    // Atualiza o status do bem
+    await prisma.bemPatrimonial.update({
+      where: { id: Number(bem_id) },
+      data: { status_atual: 'Transferido' }
     });
-    const novaAtribuicao = await prisma.atribuicaoTecnico.create({
-      data: { bem_id: Number(bem_id), tecnico_id: Number(tecnico_id), observacoes }
+
+    // Regista a atribuição
+    const atribuicao = await prisma.atribuicaoTecnico.create({
+      data: {
+        bem_id: Number(bem_id),
+        tecnico_id: Number(tecnico_id),
+        observacoes
+      }
     });
-    res.status(201).json({ message: "Bem atribuído com sucesso!", data: novaAtribuicao });
+
+    //  Avisa o técnico que ele recebeu o equipamento
+    await dispararNotificacao({
+      usuario_id: Number(tecnico_id),
+      titulo: '💼 Termo de Cautela Emitido',
+      mensagem: `O equipamento *${bem.descricao}* (Tombamento: ${bem.tombamento}) foi atribuído à sua responsabilidade.${observacoes ? `\n\n📝 Obs: ${observacoes}` : ''}`,
+      tipo: 'info',
+      link_acao: '/lista-bens'
+    });
+
+    res.status(201).json({ message: 'Bem atribuído com sucesso!', data: atribuicao });
   } catch (error) {
-    res.status(500).json({ message: "Erro ao registrar a atribuição do bem." });
+    res.status(500).json({ message: 'Erro ao atribuir bem.' });
   }
 };
 
 export const devolverBem = async (req: Request, res: Response) => {
   const { bem_id } = req.body;
+
   try {
-    await prisma.atribuicaoTecnico.updateMany({
-      where: { bem_id: Number(bem_id), data_devolucao: null },
+    const bem = await prisma.bemPatrimonial.findUnique({ where: { id: Number(bem_id) } });
+    if (!bem) return res.status(404).json({ message: 'Bem não encontrado.' });
+
+    // Encontra quem estava com o equipamento
+    const atribuicaoAberta = await prisma.atribuicaoTecnico.findFirst({
+      where: { bem_id: Number(bem_id), data_devolucao: null }
+    });
+
+    if (!atribuicaoAberta) return res.status(400).json({ message: 'Este bem não está atribuído a ninguém atualmente.' });
+
+    // Fecha a atribuição
+    await prisma.atribuicaoTecnico.update({
+      where: { id: atribuicaoAberta.id },
       data: { data_devolucao: new Date() }
     });
-    res.status(200).json({ message: "Equipamento devolvido ao inventário geral." });
+
+    // Devolve o status para Ativo
+    await prisma.bemPatrimonial.update({
+      where: { id: Number(bem_id) },
+      data: { status_atual: 'Ativo' }
+    });
+
+    // Envia o recibo de devolução ao técnico
+    await dispararNotificacao({
+      usuario_id: atribuicaoAberta.tecnico_id,
+      titulo: '↩️ Equipamento Devolvido',
+      mensagem: `A sua responsabilidade sobre o equipamento *${bem.descricao}* (Tombamento: ${bem.tombamento}) foi encerrada com sucesso. O item voltou para o inventário geral.`,
+      tipo: 'sucesso',
+      link_acao: '/lista-bens'
+    });
+
+    res.json({ message: 'Bem devolvido com sucesso!' });
   } catch (error) {
-    res.status(500).json({ message: "Erro ao registrar a devolução." });
+    res.status(500).json({ message: 'Erro ao devolver bem.' });
   }
 };
 

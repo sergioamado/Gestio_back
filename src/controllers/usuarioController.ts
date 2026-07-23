@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 
 const prisma = new PrismaClient();
 
@@ -169,5 +170,70 @@ export const salvarPreferenciasNotificacao = async (req: Request, res: Response)
   } catch (error) {
     console.error("Erro ao salvar:", error);
     res.status(500).json({ message: "Erro ao salvar preferências." });
+  }
+};
+
+
+// Gera o Link do Telegram
+export const gerarLinkTelegram = async (req: Request, res: Response) => {
+  const usuarioId = req.user?.id; 
+
+  try {
+    // Gera o código único para o Deep Linking
+    const tokenSecreto = crypto.randomBytes(8).toString('hex');
+
+    // Salva o código temporário no perfil do usuário
+    await prisma.usuarios.update({
+      where: { id: usuarioId },
+      data: { telegram_token: tokenSecreto }
+    });
+
+    // Lê o Username do Bot a partir do ficheiro .env (Muito mais seguro e dinâmico)
+    const botUsername = process.env.TELEGRAM_BOT_USERNAME;
+
+    if (!botUsername) {
+      return res.status(500).json({ message: 'A variável TELEGRAM_BOT_USERNAME não está configurada no servidor.' });
+    }
+
+    // Monta o link mágico
+    const link = `https://t.me/${botUsername}?start=${tokenSecreto}`;
+
+    res.json({ link });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao gerar link de vinculação do Telegram.' });
+  }
+};
+
+// Atualiza as preferências (Sininho e Telegram)
+export const atualizarPreferenciasNotificacao = async (req: Request, res: Response) => {
+  const usuarioId = req.user?.id;
+  const { notificacoes_app, notificacoes_bot, desvincular_telegram } = req.body;
+
+  try {
+    const dataAtualizacao: any = {
+      notificacoes_app,
+      notificacoes_bot
+    };
+
+    // Se o usuário pedir para desligar o Telegram do sistema
+    if (desvincular_telegram) {
+      dataAtualizacao.telegram_chat_id = null;
+      dataAtualizacao.telegram_token = null;
+      dataAtualizacao.notificacoes_bot = false;
+    }
+
+    const usuarioAtualizado = await prisma.usuarios.update({
+      where: { id: usuarioId },
+      data: dataAtualizacao,
+      select: { notificacoes_app: true, notificacoes_bot: true, telegram_chat_id: true }
+    });
+
+    res.json({ 
+      message: 'Preferências atualizadas com sucesso!', 
+      vinculado: !!usuarioAtualizado.telegram_chat_id,
+      preferencias: usuarioAtualizado
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao atualizar preferências.' });
   }
 };

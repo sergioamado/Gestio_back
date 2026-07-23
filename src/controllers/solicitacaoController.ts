@@ -2,7 +2,7 @@
 import { Request, Response } from 'express';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { z } from 'zod';
-
+import { dispararNotificacao } from './notificacaoController';
 
 const prisma = new PrismaClient();
 
@@ -22,7 +22,6 @@ const solicitacaoSchema = z.object({
 
 export const getAllSolicitacoes = async (req: Request, res: Response) => {
   try {
-    
     const { unidade_id, status, tecnico_id_filtro, numero_glpi, page = 1, limit = 10 } = req.query;
     const where: any = {};
 
@@ -31,11 +30,9 @@ export const getAllSolicitacoes = async (req: Request, res: Response) => {
     if (tecnico_id_filtro) where.responsavel_usuario_id = Number(tecnico_id_filtro);
     if (numero_glpi) where.numero_glpi = Number(numero_glpi);
 
-  
     const skip = (Number(page) - 1) * Number(limit);
     const take = Number(limit);
 
-    
     const [solicitacoes, total] = await Promise.all([
       prisma.solicitacoes.findMany({
         where: where as any, 
@@ -80,21 +77,18 @@ export const createSolicitacao = async (req: Request, res: Response) => {
   try {
     const validatedData = solicitacaoSchema.parse(req.body);
     const { itens, justificativa, ...solicitacaoData } = validatedData;
-    const usuario_id = req.user!.id;
+    const usuario_id = req.user!.id; // Quem clicou no botão "Gerar OS"
 
     const novaSolicitacao = await prisma.$transaction(async (tx) => {
-      
       const solicitacao = await tx.solicitacoes.create({
          data: {
            responsavel_usuario_id: validatedData.responsavel_usuario_id,
-           
-           numero_glpi: String(validatedData.numero_glpi), 
-           
+           numero_glpi: validatedData.numero_glpi, 
            setor_equipamento: validatedData.setor_equipamento,
            patrimonio: validatedData.patrimonio,
            unidade_id: validatedData.unidade_id,
            tipo_requisicao: validatedData.tipo_requisicao,
-           usuario_id: validatedData.responsavel_usuario_id,
+           usuario_id: usuario_id, // Gravando quem realmente solicitou
            justificativa: validatedData.justificativa
          }
        });
@@ -121,13 +115,39 @@ export const createSolicitacao = async (req: Request, res: Response) => {
       return solicitacao;
     });
 
+    // 🚀 NOTIFICAÇÃO: Confirmação de Criação
+    await dispararNotificacao({
+      usuario_id: usuario_id,
+      titulo: '📦 Nova Ordem de Serviço',
+      mensagem: `A sua solicitação (GLPI: ${validatedData.numero_glpi}) foi gerada com sucesso e os itens foram reservados do estoque.`,
+      tipo: 'sucesso',
+      link_acao: '/gerenciar-solicitacoes'
+    });
+
+    // Alerta para os Gerentes da Unidade
+    const gerentes = await prisma.usuarios.findMany({
+      where: {
+        unidade_id: validatedData.unidade_id,
+        role: 'gerente' // Procura todos os gerentes desta unidade
+      }
+    });
+
+    for (const gerente of gerentes) {
+      await dispararNotificacao({
+        usuario_id: gerente.id,
+        titulo: '🔔 Nova OS Aguardando Aprovação',
+        mensagem: `Uma nova OS (GLPI: ${validatedData.numero_glpi}) foi registada na sua unidade e precisa de análise.`,
+        tipo: 'info',
+        link_acao: '/gerenciar-solicitacoes'
+      });
+    }
+
     res.status(201).json(novaSolicitacao);
   } catch (error: any) {
     console.error(error);
     res.status(400).json({ message: error.message || 'Erro ao criar solicitação.' });
   }
 };
-
 
 export const getSolicitacaoById = async (req: Request, res: Response) => {
   const { id } = req.params;
@@ -154,15 +174,16 @@ export const getSolicitacaoById = async (req: Request, res: Response) => {
   }
 };
 
-
 export const updateStatusSolicitacao = async (req: Request, res: Response) => {
     const { id } = req.params;
     const { status, nova_justificativa } = req.body;
+    const idUsuarioAcao = req.user!.id; // Quem clicou no botão de atualizar
 
     if (!status) return res.status(400).json({ message: 'O status é obrigatório.' });
 
     try {
         const solicitacaoAtual = await prisma.solicitacoes.findUnique({ where: { id: Number(id) } });
+        if (!solicitacaoAtual) return res.status(404).json({ message: 'Solicitação não encontrada' });
         
         const justificativaAtualizada = nova_justificativa 
             ? `${(solicitacaoAtual as any)?.justificativa || ''}\n[${new Date().toLocaleString()}] Admin: ${nova_justificativa}`
@@ -170,14 +191,49 @@ export const updateStatusSolicitacao = async (req: Request, res: Response) => {
 
         const solicitacao = await prisma.solicitacoes.update({
             where: { id: Number(id) },
-            data: { status, justificativa: justificativaAtualizada } as any, // Bypass TS(2339) para justificativa
+            data: { status, justificativa: justificativaAtualizada } as any, 
         });
+
+        // Define a cor/ícone baseado no status
+        let iconeTipo = 'info';
+        if (status === 'APROVADA') iconeTipo = 'sucesso';
+        if (status === 'REJEITADA' || status === 'CANCELADA') iconeTipo = 'alerta';
+
+        //  Avisa o dono da OS (Solicitante original)
+        // Só avisa se não foi ele próprio a fazer a alteração
+        if (solicitacao.usuario_id !== idUsuarioAcao) {
+          await dispararNotificacao({
+            usuario_id: solicitacao.usuario_id,
+            titulo: '🔄 Atualização de Status',
+            mensagem: `A sua solicitação (GLPI: ${solicitacao.numero_glpi}) mudou para: *${status}*.${nova_justificativa ? `\n\n📝 Obs: ${nova_justificativa}` : ''}`,
+            tipo: iconeTipo,
+            link_acao: '/gerenciar-solicitacoes'
+          });
+        }
+
+        // Avisa os Gerentes da Unidade (Para controlo operacional)
+        const gerentes = await prisma.usuarios.findMany({
+          where: { unidade_id: solicitacao.unidade_id, role: 'gerente' }
+        });
+
+        for (const gerente of gerentes) {
+          // Garante que o gerente não recebe um aviso sobre uma ação que ele mesmo fez agora
+          if (gerente.id !== idUsuarioAcao) {
+            await dispararNotificacao({
+              usuario_id: gerente.id,
+              titulo: '📊 OS Atualizada (Dashboard)',
+              mensagem: `A OS (GLPI: ${solicitacao.numero_glpi}) foi alterada para *${status}*.`,
+              tipo: 'info',
+              link_acao: '/gerenciar-solicitacoes'
+            });
+          }
+        }
+
         res.json(solicitacao);
     } catch (error) {
         res.status(500).json({ message: 'Erro ao atualizar status.' });
     }
 };
-
 
 export const getLatestSolicitacoes = async (req: Request, res: Response) => {
     const { id: userId, role, unidade_id } = req.user!; 
@@ -212,14 +268,14 @@ export const getLatestSolicitacoes = async (req: Request, res: Response) => {
     }
 };
 
-
 export const updateSolicitacaoItemStatus = async (req: Request, res: Response) => {
     const { itemId } = req.params;
     const { status_entrega } = req.body;
 
     try {
         const solicitacao_itens = await prisma.solicitacao_itens.findUnique({
-            where: { id: Number(itemId) }
+            where: { id: Number(itemId) },
+            include: { solicitacoes: true, itens: true } // Precisamos puxar a OS e o Item para a notificação
         });
 
         if (!solicitacao_itens) {
@@ -245,13 +301,21 @@ export const updateSolicitacaoItemStatus = async (req: Request, res: Response) =
             return itemAtualizado;
         });
 
+        // 🚀 NOTIFICAÇÃO: Status de um Item específico alterado (Entregue/Devolvido)
+        await dispararNotificacao({
+          usuario_id: solicitacao_itens.solicitacoes.usuario_id,
+          titulo: '🛠️ Atualização de Peça/Equipamento',
+          mensagem: `A peça/equipamento *${solicitacao_itens.itens.descricao}* da OS ${solicitacao_itens.solicitacoes.numero_glpi} foi marcada como: *${status_entrega}*.`,
+          tipo: status_entrega === 'Entregue' ? 'sucesso' : 'info',
+          link_acao: '/gerenciar-solicitacoes'
+        });
+
         res.json(resultado);
     } catch (error) {
         console.error("Erro em updateSolicitacaoItemStatus:", error);
         res.status(500).json({ message: 'Erro ao atualizar status do item.' });
     }
 };
-
 
 export const cancelarItemSolicitacao = async (req: Request, res: Response) => {
   const { itemId } = req.params;
@@ -263,7 +327,6 @@ export const cancelarItemSolicitacao = async (req: Request, res: Response) => {
 
     if (!solicitacao_itens) return res.status(404).json({ message: "Item da solicitação não encontrado." });
 
-    // 2. Muda o status para Cancelado
     await prisma.solicitacao_itens.update({
       where: { id: Number(itemId) },
       data: { status_entrega: 'Cancelado' }
@@ -290,7 +353,6 @@ export const sinalizarDefeitoItem = async (req: Request, res: Response) => {
 
     if (!solicitacao_itens) return res.status(404).json({ message: "Item não encontrado." });
 
-    // 1. Muda o status para Defeito
     await prisma.solicitacao_itens.update({
       where: { id: Number(itemId) },
       data: { status_entrega: 'Defeito' }

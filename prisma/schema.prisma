@@ -8,34 +8,40 @@ datasource db {
 }
 
 model itens {
-  id                Int                 @id @default(autoincrement())
-  codigo_sipac      String?             @db.VarChar(50)
-  codigo_ref        String?             @db.VarChar(50) // Novo: Código de referência interno
-  pregao            String?             @db.VarChar(100)
-  descricao         String
-  quantidade_com_defeito Int            @default(0)
-  tipo              String?             @db.VarChar(100)
-  unidade_medida    String              @default("UND") @db.VarChar(20)
-  localizacao       String?             @db.VarChar(100)
-  quantidade        Int
-  preco_unitario    Decimal             @db.Decimal(10, 2)
-  unidade_id        Int
-  is_permanente     Boolean             @default(false) // Novo: Define se o item exige devolução
-  patrimonio_item   String?             @db.VarChar(50)  // Novo: Para peças com património único
+  id                     Int                 @id @default(autoincrement())
+  codigo_sipac           String?             @db.VarChar(50)
+  codigo_ref             String?             @db.VarChar(50)
+  pregao                 String?             @db.VarChar(100)
+  descricao              String
+  quantidade_com_defeito Int                 @default(0)
+  tipo                   String?             @db.VarChar(100)
+  unidade_medida         String              @default("UND") @db.VarChar(20)
+  localizacao            String?             @db.VarChar(100)
+  quantidade             Int
+  preco_unitario         Decimal             @db.Decimal(10, 2)
+  unidade_id             Int
+  is_permanente          Boolean             @default(false)
+  patrimonio_item        String?             @db.VarChar(50)
   unidades_organizacionais unidades_organizacionais @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   solicitacao_itens solicitacao_itens[]
 
   @@unique([codigo_sipac, unidade_id])
 }
 
+// 🚀 MODELO DE NOTIFICAÇÕES UNIFICADO E APERFEIÇOADO
 model notificacoes {
-  id           Int       @id @default(autoincrement())
+  id           Int      @id @default(autoincrement())
   usuario_id   Int
-  mensagem     String
-  link_url     String?   @db.VarChar(255)
-  lida         Boolean   @default(false)
-  data_criacao DateTime? @default(now()) @db.Timestamptz(6)
-  usuarios     usuarios  @relation(fields: [usuario_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  titulo       String   @db.VarChar(255)
+  mensagem     String   @db.Text
+  tipo         String   @default("SISTEMA") @db.VarChar(50)
+  link_acao    String?  @db.VarChar(255) // Para botões de clique rápido (Deep link)
+  lida         Boolean  @default(false)
+  data_criacao DateTime @default(now()) @db.Timestamptz(6)
+
+  usuarios     usuarios @relation(fields: [usuario_id], references: [id], onDelete: Cascade)
+
+  @@index([usuario_id])
 }
 
 model solicitacao_itens {
@@ -50,20 +56,20 @@ model solicitacao_itens {
 }
 
 model solicitacoes {
-  id                      Int                 @id @default(autoincrement())
-  usuario_id              Int
-  responsavel_usuario_id  Int
-  setor_equipamento       String?             @db.VarChar(255)
-  numero_glpi             Int
-  patrimonio              String?             @db.VarChar(50)
-  data_solicitacao        DateTime?           @default(now()) @db.Timestamptz(6)
-  status                  String              @default("PENDENTE") @db.VarChar(50)
-  tipo_requisicao         String              @default("PEDIDO") @db.VarChar(20)
-  justificativa           String?             @db.Text
-  numero_pedido_externo   String?             @db.VarChar(100)
-  documento_emitido_em    DateTime?           @db.Timestamptz(6)
-  unidade_id              Int
-  solicitacao_itens       solicitacao_itens[]
+  id                     Int                 @id @default(autoincrement())
+  usuario_id             Int
+  responsavel_usuario_id Int
+  setor_equipamento      String?             @db.VarChar(255)
+  numero_glpi            Int
+  patrimonio             String?             @db.VarChar(50)
+  data_solicitacao       DateTime?           @default(now()) @db.Timestamptz(6)
+  status                 String              @default("PENDENTE") @db.VarChar(50)
+  tipo_requisicao        String              @default("PEDIDO") @db.VarChar(20)
+  justificativa          String?             @db.Text
+  numero_pedido_externo  String?             @db.VarChar(100)
+  documento_emitido_em   DateTime?           @db.Timestamptz(6)
+  unidade_id             Int
+  solicitacao_itens      solicitacao_itens[]
   usuarios_solicitacoes_responsavel_usuario_idTousuarios usuarios @relation("solicitacoes_responsavel_usuario_idTousuarios", fields: [responsavel_usuario_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   unidades_organizacionais unidades_organizacionais @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   usuarios_solicitacoes_usuario_idTousuarios usuarios @relation("solicitacoes_usuario_idTousuarios", fields: [usuario_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -82,28 +88,32 @@ model unidades_organizacionais {
   itens                  itens[]
   solicitacoes           solicitacoes[]
   usuarios               usuarios[]
-  bens                  BemPatrimonial[]
+  bens                   BemPatrimonial[]
   movimentacoes_origem  MovimentacaoBem[] @relation("OrigemBem")
   movimentacoes_destino MovimentacaoBem[] @relation("DestinoBem")
 }
 
 model usuarios {
-  id                                                         Int                       @id @default(autoincrement())
-  username                                                   String                    @unique @db.VarChar(100)
-  hashed_password                                            String                    @db.VarChar(255)
-  nome_completo                                              String                    @db.VarChar(255)
-  role                                                       String                    @db.VarChar(50)
-  telefone                                                   String?                   @db.VarChar(20)
-  email                                                      String?                   @unique @db.VarChar(255)
-  telegram_chat_id                                           String?                   @db.VarChar(50)
-  unidade_id                                                 Int?
-  data_criacao                                               DateTime?                 @default(now()) @db.Timestamptz(6)
-  atendimentos_criados                                       AtendimentoImpressora[]
-  requisicoes_suprimentos                                    ControleSuprimentos[]
-  impressoes_fora_unidade                                    ImpressaoForaUnidade[]
-  manutencoes_eletronicas                                    manutencao_eletronica[]
-  notificacoes                                               notificacoes[]
-  preferencias_notificacao                                   Json?
+  id                                                     Int                     @id @default(autoincrement())
+  username                                               String                  @unique @db.VarChar(100)
+  hashed_password                                        String                  @db.VarChar(255)
+  nome_completo                                          String                  @db.VarChar(255)
+  role                                                   String                  @db.VarChar(50)
+  telefone                                               String?                 @db.VarChar(20)
+  email                                                  String?                 @unique @db.VarChar(255)
+  telegram_chat_id                                       String?                 @unique @db.VarChar(50)
+  telegram_token                                         String?                 @unique @db.VarChar(100)
+  notificacoes_app                                       Boolean                 @default(true)
+  notificacoes_bot                                       Boolean                 @default(true)
+
+  unidade_id                                             Int?
+  data_criacao                                           DateTime?               @default(now()) @db.Timestamptz(6)
+  atendimentos_criados                                   AtendimentoImpressora[]
+  requisicoes_suprimentos                                ControleSuprimentos[]
+  impressoes_fora_unidade                                ImpressaoForaUnidade[]
+  manutencoes_eletronicas                                manutencao_eletronica[]
+  notificacoes                                           notificacoes[]
+  preferencias_notificacao                               Json?
   solicitacoes_solicitacoes_responsavel_usuario_idTousuarios solicitacoes[]            @relation("solicitacoes_responsavel_usuario_idTousuarios")
   solicitacoes_solicitacoes_usuario_idTousuarios             solicitacoes[]            @relation("solicitacoes_usuario_idTousuarios")
   unidades_organizacionais                                   unidades_organizacionais? @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -123,19 +133,19 @@ model manutencao_eletronica {
 }
 
 model Impressora {
-  id                       Int                      @id @default(autoincrement())
-  nome                     String                   @db.VarChar(150)
-  modelo                   String                   @db.VarChar(100)
-  numero_serie             String                   @unique @db.VarChar(100)
-  ip                       String?                  @unique @db.VarChar(45)
-  localizacao              String                   @db.VarChar(255)
-  servidor                 String?                  @db.VarChar(100)
-  politicas_aplicadas      Boolean                  @default(false)
-  status_verificacao       String                   @default("Não Verificado") @db.VarChar(50)
-  unidade_id               Int
-  ativo                    Boolean                  @default(true)
-  is_colorida              Boolean                  @default(false)
-  atendimentos             AtendimentoImpressora[]
+  id                     Int                     @id @default(autoincrement())
+  nome                   String                  @db.VarChar(150)
+  modelo                 String                  @db.VarChar(100)
+  numero_serie           String                  @unique @db.VarChar(100)
+  ip                     String?                 @unique @db.VarChar(45)
+  localizacao            String                  @db.VarChar(255)
+  servidor               String?                 @db.VarChar(100)
+  politicas_aplicadas    Boolean                 @default(false)
+  status_verificacao     String                  @default("Não Verificado") @db.VarChar(50)
+  unidade_id             Int
+  ativo                  Boolean                 @default(true)
+  is_colorida            Boolean                 @default(false)
+  atendimentos           AtendimentoImpressora[]
   solicitacoes_suprimentos ControleSuprimentos[]
   unidades_organizacionais unidades_organizacionais @relation(fields: [unidade_id], references: [id])
 }
@@ -225,22 +235,21 @@ enum StatusAtendimento {
   Cancelado
 }
 
-
 model BemPatrimonial {
-  id                Int      @id @default(autoincrement())
-  tombamento        String   @unique // Identificador SIPAC
-  descricao         String   @db.Text
-  marca             String?
-  localizacao_fisica String   // Obrigatório
-  foto_url          String?  // Opcional
-  status_atual      String   @default("Ativo") // Ativo, Inservivel, Ocioso, Transferido
-  unidade_id        Int
-  data_importacao   DateTime @default(now())
+  id                 Int      @id @default(autoincrement())
+  tombamento         String   @unique
+  descricao          String   @db.Text
+  marca              String?
+  localizacao_fisica String   
+  foto_url           String?  
+  status_atual       String   @default("Ativo") 
+  unidade_id         Int
+  data_importacao    DateTime @default(now())
 
-  unidade           unidades_organizacionais @relation(fields: [unidade_id], references: [id])
-  atribuicoes       AtribuicaoTecnico[]
-  movimentacoes     MovimentacaoBem[]
-  conferencias      ConferenciaLevantamento[]
+  unidade            unidades_organizacionais @relation(fields: [unidade_id], references: [id])
+  atribuicoes        AtribuicaoTecnico[]
+  movimentacoes      MovimentacaoBem[]
+  conferencias       ConferenciaLevantamento[]
 }
 
 model AtribuicaoTecnico {
@@ -258,10 +267,10 @@ model AtribuicaoTecnico {
 model MovimentacaoBem {
   id                 Int       @id @default(autoincrement())
   bem_id             Int
-  tipo               String    @db.VarChar(50) // "TRANSFERENCIA" ou "RECOLHIMENTO"
-  subtipo            String?   @db.VarChar(50) // "Inservível" ou "Ocioso"
+  tipo               String    @db.VarChar(50) 
+  subtipo            String?   @db.VarChar(50) 
   origem_unidade_id  Int
-  destino_unidade_id Int?      // Unidade de destino
+  destino_unidade_id Int?      
   data_envio         DateTime  @default(now()) @db.Timestamptz(6)
   data_recebimento   DateTime? @db.Timestamptz(6)
   
@@ -280,27 +289,12 @@ model LevantamentoPatrimonial {
 }
 
 model ConferenciaLevantamento {
-  id              Int      @id @default(autoincrement())
-  levantamento_id Int
-  bem_id          Int
-  status_conferido String  // "OK", "Transferido", "Nao Encontrado"
-  justificativa   String?  @db.Text // Campo para justificativa
+  id               Int      @id @default(autoincrement())
+  levantamento_id  Int
+  bem_id           Int
+  status_conferido String  
+  justificativa    String?  @db.Text 
 
-  levantamento    LevantamentoPatrimonial @relation(fields: [levantamento_id], references: [id])
-  bem             BemPatrimonial          @relation(fields: [bem_id], references: [id])
-}
-
-model notificacoes {
-  id           Int      @id @default(autoincrement())
-  usuario_id   Int
-  titulo       String   @db.VarChar(255)
-  mensagem     String   @db.Text
-  tipo         String   @default("SISTEMA") // OS, ESTOQUE, ALERTA, SISTEMA
-  lida         Boolean  @default(false)
-  data_criacao DateTime @default(now()) @db.Timestamptz(6)
-
-  // Relacionamento com o usuário
-  usuario      usuarios @relation(fields: [usuario_id], references: [id], onDelete: Cascade)
-
-  @@index([usuario_id])
+  levantamento     LevantamentoPatrimonial @relation(fields: [levantamento_id], references: [id])
+  bem              BemPatrimonial          @relation(fields: [bem_id], references: [id])
 }

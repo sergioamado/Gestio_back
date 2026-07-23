@@ -1,92 +1,124 @@
 // src/controllers/notificacaoController.ts
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
+import TelegramBot from 'node-telegram-bot-api';
+import dotenv from 'dotenv';
 
+dotenv.config();
 const prisma = new PrismaClient();
 
-// --- FUNÇÃO INTERNA DO CONTROLADOR ---
-// Dispara a requisição HTTP para a API do Telegram
-const enviarMensagemTelegram = async (chat_id: string, mensagem: string) => {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  
-  if (!token || !chat_id) {
-    console.warn("Telegram Token ou Chat ID não configurados. Notificação não enviada.");
-    return;
-  }
+// INICIALIZAÇÃO DO BOT DO TELEGRAM
+const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+export const bot = telegramToken ? new TelegramBot(telegramToken, { polling: true }) : null;
 
-  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+// Lógica de Deep Linking (Conexão Silenciosa do Bot)
+if (bot) {
+  bot.onText(/\/start (.+)/, async (msg, match) => {
+    const chatId = msg.chat.id.toString();
+    const tokenSecreto = match ? match[1] : null;
 
+    if (tokenSecreto) {
+      try {
+        const usuario = await prisma.usuarios.findUnique({ where: { telegram_token: tokenSecreto } });
+        
+        if (usuario) {
+          await prisma.usuarios.update({
+            where: { id: usuario.id },
+            data: { telegram_chat_id: chatId, telegram_token: null }
+          });
+          bot.sendMessage(chatId, `✅ *Bem-vindo(a), ${usuario.nome_completo}!* \nO seu Telegram foi vinculado com sucesso ao Gestio. Passará a receber alertas importantes aqui.`, { parse_mode: 'Markdown' });
+        } else {
+          bot.sendMessage(chatId, '❌ Link de conexão inválido ou já expirado.');
+        }
+      } catch (err) {
+        console.error('Erro na conexão do bot:', err);
+      }
+    }
+  });
+}
+
+// MOTOR CENTRAL DE NOTIFICAÇÕES 
+export const dispararNotificacao = async (dados: {
+  usuario_id: number;
+  titulo: string;
+  mensagem: string;
+  tipo: string; 
+  link_acao?: string;
+}) => {
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chat_id,
-        text: mensagem,
-        parse_mode: 'HTML' 
-      })
+    const usuario = await prisma.usuarios.findUnique({
+      where: { id: dados.usuario_id },
+      select: { telegram_chat_id: true, notificacoes_app: true, notificacoes_bot: true }
     });
 
-    if (!response.ok) {
-      console.error("Falha ao enviar mensagem via Telegram:", await response.text());
+    if (!usuario) return;
+
+    // Grava no Sininho Interno
+    if (usuario.notificacoes_app) {
+      await prisma.notificacoes.create({
+        data: {
+          usuario_id: dados.usuario_id,
+          titulo: dados.titulo,
+          mensagem: dados.mensagem,
+          tipo: dados.tipo.toUpperCase(), 
+          link_acao: dados.link_acao,
+          lida: false
+        }
+      });
+    }
+
+    // Dispara o Push no Telegram
+    if (bot && usuario.telegram_chat_id && usuario.notificacoes_bot) {
+      const icones: Record<string, string> = { 'info': 'ℹ️', 'alerta': '⚠️', 'sucesso': '✅', 'erro': '❌' };
+      const icone = icones[dados.tipo.toLowerCase()] || '🔔';
+
+      const urlFrontend = 'http://localhost:5173';
+      const texto = `${icone} *${dados.titulo}*\n\n${dados.mensagem}${dados.link_acao ? `\n\n🔗 [Acessar no Sistema](${urlFrontend}${dados.link_acao})` : ''}`;
+      
+      await bot.sendMessage(usuario.telegram_chat_id, texto, { parse_mode: 'Markdown' });
     }
   } catch (error) {
-    console.error("Erro na comunicação com a API do Telegram:", error);
+    console.error(`Falha ao notificar user ${dados.usuario_id}:`, error);
   }
 };
 
-// --- ROTAS DA API ---
-
-// 1. Lista as notificações do usuário logado (Sininho do Front)
-export const getMinhasNotificacoes = async (req: Request, res: Response) => {
-  const usuario_id = req.user!.id;
-
+//  ENDPOINTS HTTP PARA O FRONTEND
+export const getNotificacoes = async (req: Request, res: Response) => {
   try {
+    const usuarioId = req.user!.id;
     const notificacoes = await prisma.notificacoes.findMany({
-      where: { usuario_id },
+      where: { usuario_id: usuarioId },
       orderBy: { data_criacao: 'desc' },
-      take: 20 
+      take: 50 // Limita as últimas 50 para não pesar
     });
     res.json(notificacoes);
   } catch (error) {
-    res.status(500).json({ message: 'Erro ao buscar notificações.' });
+    res.status(500).json({ message: 'Erro ao buscar notificações' });
   }
 };
 
-// 2. Marca uma notificação como lida
 export const marcarComoLida = async (req: Request, res: Response) => {
-  const { id } = req.params;
-
   try {
+    const { id } = req.params;
     const notificacao = await prisma.notificacoes.update({
       where: { id: Number(id) },
       data: { lida: true }
     });
     res.json(notificacao);
   } catch (error) {
-    res.status(500).json({ message: 'Erro ao atualizar notificação.' });
+    res.status(500).json({ message: 'Erro ao marcar como lida' });
   }
 };
 
-// --- FUNÇÃO AUXILIAR PARA OUTROS CONTROLADORES ---
-// Você vai importar e chamar esta função dentro do solicitacaoController, por exemplo.
-export const criarNotificacaoInterna = async (usuario_id: number, mensagem: string, telegram_chat_id?: string) => {
+export const marcarTodasComoLidas = async (req: Request, res: Response) => {
   try {
-    // Salva no banco de dados
-    await prisma.notificacoes.create({
-      data: {
-        usuario_id,
-        mensagem,
-        lida: false,
-        data_criacao: new Date()
-      }
+    const usuarioId = req.user!.id;
+    await prisma.notificacoes.updateMany({
+      where: { usuario_id: usuarioId, lida: false },
+      data: { lida: true }
     });
-
-    // Se o usuário tiver um ID do Telegram, dispara a mensagem
-    if (telegram_chat_id) {
-      await enviarMensagemTelegram(telegram_chat_id, `🔔 <b>Gestio Informa:</b>\n\n${mensagem}`);
-    }
+    res.json({ message: 'Todas as notificações marcadas como lidas.' });
   } catch (error) {
-    console.error('Erro ao processar notificação interna:', error);
+    res.status(500).json({ message: 'Erro ao marcar todas como lidas' });
   }
 };
