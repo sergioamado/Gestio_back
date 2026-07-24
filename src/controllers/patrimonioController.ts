@@ -28,12 +28,10 @@ const bemPatrimonialSchema = z.object({
 
 //  ALIMENTAÇÃO DO BANCO DE DADOS
 
-// Criar um Bem Manualmente
 export const createBem = async (req: Request, res: Response) => {
   try {
     const data = bemPatrimonialSchema.parse(req.body);
     
-    // Verifica se já existe um bem com esse tombamento
     const existente = await prisma.bemPatrimonial.findUnique({
       where: { tombamento: data.tombamento }
     });
@@ -49,7 +47,6 @@ export const createBem = async (req: Request, res: Response) => {
   }
 };
 
-// Atualizar um Bem Manualmente
 export const updateBem = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
@@ -64,7 +61,6 @@ export const updateBem = async (req: Request, res: Response) => {
   }
 };
 
-// Deletar um Bem (Caso tenha sido importado errado)
 export const deleteBem = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
@@ -98,7 +94,6 @@ export const importarDadosSipac = async (req: Request, res: Response) => {
     let erros = 0;
     let totalEncontrados = 0;
 
-    //  PROCESSAMENTO DE PDF
     if (isPDF) {
       const dataBuffer = fs.readFileSync(filePath);
       const pdfData = await pdfParse(dataBuffer);
@@ -147,9 +142,7 @@ export const importarDadosSipac = async (req: Request, res: Response) => {
           }
         } catch (err) { erros++; }
       }
-    } 
-    //  PROCESSAMENTO DE CSV / EXCEL
-    else {
+    } else {
       const workbook = xlsx.readFile(filePath);
       const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
@@ -158,11 +151,10 @@ export const importarDadosSipac = async (req: Request, res: Response) => {
       if (rawData.length === 0) throw new Error("A planilha está vazia.");
 
       for (const row of rawData as any[]) {
-        // Tenta achar as colunas independentemente de como o SIPAC exporta o cabeçalho
         const tombamento = (row['Tombamento'] || row['tombamento'] || row['TOMBAMENTO'] || row['codigo'] || '')?.toString().trim();
         let descricao = (row['Denominação'] || row['Descrição'] || row['descricao'] || row['DESCRICAO'] || row['nome'] || '')?.toString().trim();
 
-        if (!tombamento || tombamento.length < 5) continue; // Ignora linhas em branco
+        if (!tombamento || tombamento.length < 5) continue; 
         
         descricao = descricao.substring(0, 200) || "Descrição não identificada";
         totalEncontrados++;
@@ -182,11 +174,10 @@ export const importarDadosSipac = async (req: Request, res: Response) => {
       }
     }
 
-    // Limpa o arquivo nos dois casos
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath); 
 
     if (novos === 0 && atualizados === 0 && erros === 0) {
-       return res.status(400).json({ message: 'Nenhum equipamento foi processado. O arquivo pode estar vazio ou as colunas (Tombamento/Descrição) não foram identificadas.' });
+       return res.status(400).json({ message: 'Nenhum equipamento foi processado. O arquivo pode estar vazio ou as colunas não foram identificadas.' });
     }
 
     res.status(200).json({ 
@@ -296,42 +287,39 @@ export const uploadFoto = async (req: Request, res: Response) => {
   }
 };
 
-export const registrarConferencia = async (req: Request, res: Response) => {
-    const { levantamento_id, bem_id, status_conferido, justificativa } = req.body;
-    try {
-        const conferencia = await prisma.conferenciaLevantamento.create({
-            data: { levantamento_id, bem_id, status_conferido, justificativa }
-        });
-        res.status(201).json(conferencia);
-    } catch (error) {
-        res.status(500).json({ message: 'Erro ao registrar conferência.' });
-    }
-};
-
-// Termos de Cautela (Atribuições)
+// 🚀 REGRA INVENTÁRIO #1: Atribuição de Bens gravando no HistoricoPatrimonio
 export const atribuirBem = async (req: Request, res: Response) => {
   const { bem_id, tecnico_id, observacoes } = req.body;
+  const usuarioLogadoId = (req as any).user?.id || 1; // Fallback de segurança
 
   try {
     const bem = await prisma.bemPatrimonial.findUnique({ where: { id: Number(bem_id) } });
     if (!bem) return res.status(404).json({ message: 'Bem não encontrado.' });
 
-    // Atualiza o status do bem
-    await prisma.bemPatrimonial.update({
-      where: { id: Number(bem_id) },
-      data: { status_atual: 'Transferido' }
+    const atribuicao = await prisma.$transaction(async (tx) => {
+      await tx.bemPatrimonial.update({
+        where: { id: Number(bem_id) },
+        data: { status_atual: 'Transferido' }
+      });
+
+      const novaAtribuicao = await tx.atribuicaoTecnico.create({
+        data: { bem_id: Number(bem_id), tecnico_id: Number(tecnico_id), observacoes }
+      });
+
+      // Gravação na tabela oficial de Histórico
+      await tx.historicoPatrimonio.create({
+        data: {
+          bem_id: Number(bem_id),
+          usuario_id: usuarioLogadoId,
+          tecnico_id: Number(tecnico_id),
+          acao: 'Atribuição',
+          detalhes: observacoes || 'Equipamento atribuído ao técnico.'
+        }
+      });
+
+      return novaAtribuicao;
     });
 
-    // Regista a atribuição
-    const atribuicao = await prisma.atribuicaoTecnico.create({
-      data: {
-        bem_id: Number(bem_id),
-        tecnico_id: Number(tecnico_id),
-        observacoes
-      }
-    });
-
-    //  Avisa o técnico que ele recebeu o equipamento
     await dispararNotificacao({
       usuario_id: Number(tecnico_id),
       titulo: '💼 Termo de Cautela Emitido',
@@ -346,33 +334,44 @@ export const atribuirBem = async (req: Request, res: Response) => {
   }
 };
 
+// 🚀 REGRA INVENTÁRIO #1: Devolução gravando no HistoricoPatrimonio
 export const devolverBem = async (req: Request, res: Response) => {
   const { bem_id } = req.body;
+  const usuarioLogadoId = (req as any).user?.id || 1;
 
   try {
     const bem = await prisma.bemPatrimonial.findUnique({ where: { id: Number(bem_id) } });
     if (!bem) return res.status(404).json({ message: 'Bem não encontrado.' });
 
-    // Encontra quem estava com o equipamento
     const atribuicaoAberta = await prisma.atribuicaoTecnico.findFirst({
       where: { bem_id: Number(bem_id), data_devolucao: null }
     });
 
     if (!atribuicaoAberta) return res.status(400).json({ message: 'Este bem não está atribuído a ninguém atualmente.' });
 
-    // Fecha a atribuição
-    await prisma.atribuicaoTecnico.update({
-      where: { id: atribuicaoAberta.id },
-      data: { data_devolucao: new Date() }
+    await prisma.$transaction(async (tx) => {
+      await tx.atribuicaoTecnico.update({
+        where: { id: atribuicaoAberta.id },
+        data: { data_devolucao: new Date() }
+      });
+
+      await tx.bemPatrimonial.update({
+        where: { id: Number(bem_id) },
+        data: { status_atual: 'Ativo' }
+      });
+
+      // Gravação na tabela oficial de Histórico
+      await tx.historicoPatrimonio.create({
+        data: {
+          bem_id: Number(bem_id),
+          usuario_id: usuarioLogadoId,
+          tecnico_id: atribuicaoAberta.tecnico_id,
+          acao: 'Devolução',
+          detalhes: 'Bem devolvido ao estoque / devolvido à unidade.'
+        }
+      });
     });
 
-    // Devolve o status para Ativo
-    await prisma.bemPatrimonial.update({
-      where: { id: Number(bem_id) },
-      data: { status_atual: 'Ativo' }
-    });
-
-    // Envia o recibo de devolução ao técnico
     await dispararNotificacao({
       usuario_id: atribuicaoAberta.tecnico_id,
       titulo: '↩️ Equipamento Devolvido',
@@ -387,28 +386,100 @@ export const devolverBem = async (req: Request, res: Response) => {
   }
 };
 
+// 🚀 REGRA INVENTÁRIO #2: Transferência Direta entre Técnicos
+export const transferirEntreTecnicos = async (req: Request, res: Response) => {
+  const { bem_id, tecnico_destino_id, observacoes } = req.body;
+  const usuarioLogadoId = (req as any).user?.id || 1;
+
+  try {
+    const bem = await prisma.bemPatrimonial.findUnique({ where: { id: Number(bem_id) } });
+    if (!bem) return res.status(404).json({ message: 'Bem não encontrado.' });
+
+    const atribuicaoAberta = await prisma.atribuicaoTecnico.findFirst({
+      where: { bem_id: Number(bem_id), data_devolucao: null }
+    });
+
+    if (!atribuicaoAberta) {
+      return res.status(400).json({ message: 'Este bem não está com nenhum técnico. Faça uma atribuição normal.' });
+    }
+
+    if (atribuicaoAberta.tecnico_id === Number(tecnico_destino_id)) {
+      return res.status(400).json({ message: 'O equipamento já está na posse deste técnico.' });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Fecha a cautela do técnico atual
+      await tx.atribuicaoTecnico.update({
+        where: { id: atribuicaoAberta.id },
+        data: { data_devolucao: new Date() }
+      });
+
+      // 2. Abre a cautela para o novo técnico
+      await tx.atribuicaoTecnico.create({
+        data: {
+          bem_id: Number(bem_id),
+          tecnico_id: Number(tecnico_destino_id),
+          observacoes: observacoes || 'Transferência direta.'
+        }
+      });
+
+      // 3. Regista o Histórico Completo
+      await tx.historicoPatrimonio.create({
+        data: {
+          bem_id: Number(bem_id),
+          usuario_id: usuarioLogadoId,
+          tecnico_id: Number(tecnico_destino_id),
+          acao: 'Transferência Direta',
+          detalhes: `Equipamento repassado diretamente do técnico anterior para o novo. Obs: ${observacoes || 'Nenhuma'}`
+        }
+      });
+    });
+
+    // Notifica quem enviou
+    await dispararNotificacao({
+      usuario_id: atribuicaoAberta.tecnico_id,
+      titulo: '🔄 Transferência Concluída',
+      mensagem: `A responsabilidade do equipamento *${bem.descricao}* foi repassada para outro técnico.`,
+      tipo: 'info'
+    });
+
+    // Notifica quem recebeu
+    await dispararNotificacao({
+      usuario_id: Number(tecnico_destino_id),
+      titulo: '💼 Termo de Cautela Recebido',
+      mensagem: `O equipamento *${bem.descricao}* (Tombamento: ${bem.tombamento}) foi transferido diretamente para si.${observacoes ? `\n\n📝 Obs: ${observacoes}` : ''}`,
+      tipo: 'sucesso',
+      link_acao: '/lista-bens'
+    });
+
+    res.json({ message: 'Transferência direta realizada com sucesso!' });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao transferir equipamento.' });
+  }
+};
+
+// 🚀 REGRA INVENTÁRIO #1: Buscando da nova tabela de Auditoria
 export const getHistoricoBem = async (req: Request, res: Response) => {
   const { id } = req.params;
 
   try {
-    const movimentacoes = await prisma.movimentacaoBem.findMany({
+    const historico = await prisma.historicoPatrimonio.findMany({
       where: { bem_id: Number(id) },
       include: {
-        unidade_origem: { select: { nome: true } },
-        unidade_destino: { select: { nome: true } }
+        usuario_acao: { select: { nome_completo: true } },
+        tecnico_alvo: { select: { nome_completo: true } }
       },
-      orderBy: { data_envio: 'desc' }
+      orderBy: { data_registro: 'desc' }
     });
 
-    res.status(200).json(movimentacoes);
+    res.status(200).json(historico);
   } catch (error) {
-    res.status(500).json({ message: 'Erro ao buscar o histórico de movimentações.' });
+    res.status(500).json({ message: 'Erro ao buscar o histórico oficial do equipamento.' });
   }
 };
 
 export const iniciarLevantamento = async (req: Request, res: Response) => {
   try {
-    // Verifica se já existe um levantamento em aberto
     const aberto = await prisma.levantamentoPatrimonial.findFirst({
       where: { status: 'Aberto' }
     });
@@ -438,7 +509,6 @@ export const getLevantamentoAtual = async (req: Request, res: Response) => {
 
     if (!levantamento) return res.json(null);
 
-    // Busca todos os bens que deveriam estar nesta unidade
     const bensDaUnidade = await prisma.bemPatrimonial.findMany({
       where: { unidade_id: Number(unidade_id), status_atual: 'Ativo' },
       include: {
@@ -446,7 +516,6 @@ export const getLevantamentoAtual = async (req: Request, res: Response) => {
       }
     });
 
-    // Filtra quais já foram conferidos neste levantamento
     const conferidosIds = levantamento.conferencias.map(c => c.bem_id);
     
     const pendentes = bensDaUnidade.filter(b => !conferidosIds.includes(b.id));
@@ -474,17 +543,14 @@ export const biparItemLevantamento = async (req: Request, res: Response) => {
     const levantamento = await prisma.levantamentoPatrimonial.findFirst({ where: { status: 'Aberto' } });
     if (!levantamento) return res.status(400).json({ message: 'Nenhum levantamento em aberto.' });
 
-    // Procura o bem no banco pelo tombamento digitado/bipado
     const bem = await prisma.bemPatrimonial.findUnique({ where: { tombamento } });
     if (!bem) return res.status(404).json({ message: 'Equipamento não encontrado no sistema.' });
 
-    // Verifica se o bem já foi bipado neste levantamento
     const jaConferido = await prisma.conferenciaLevantamento.findFirst({
       where: { levantamento_id: levantamento.id, bem_id: bem.id }
     });
     if (jaConferido) return res.status(400).json({ message: 'Este item já foi conferido!' });
 
-    // Verifica se o bem pertence a outra unidade (Alerta de Inconsistência)
     let statusConferencia = 'OK';
     let justificativa = '';
     
@@ -523,4 +589,15 @@ export const finalizarLevantamento = async (req: Request, res: Response) => {
   } catch (error) {
     res.status(500).json({ message: 'Erro ao finalizar levantamento.' });
   }
+};
+export const registrarConferencia = async (req: Request, res: Response) => {
+    const { levantamento_id, bem_id, status_conferido, justificativa } = req.body;
+    try {
+        const conferencia = await prisma.conferenciaLevantamento.create({
+            data: { levantamento_id, bem_id, status_conferido, justificativa }
+        });
+        res.status(201).json(conferencia);
+    } catch (error) {
+        res.status(500).json({ message: 'Erro ao registrar conferência.' });
+    }
 };

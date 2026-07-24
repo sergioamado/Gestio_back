@@ -5,26 +5,26 @@ import { z } from 'zod';
 
 const prisma = new PrismaClient();
 
-// Schema de validação atualizado com os campos de laboratório/patrimônio
+// 🚀 Geral #11 e #3: Schema atualizado com categoria e unidade_id opcional
 const itemSchema = z.object({
   codigo_sipac: z.string().optional().nullable(),
-  codigo_ref: z.string().optional().nullable(), // Novo: Código de referência interno
+  codigo_ref: z.string().optional().nullable(), 
   pregao: z.string().optional().nullable(),
   descricao: z.string().min(3, "Descrição é obrigatória"),
   tipo: z.string().optional().nullable(),
+  categoria: z.string().default("Consumo"), // NOVO
   unidade_medida: z.string(),
   localizacao: z.string().optional().nullable(),
   quantidade: z.number().int().min(0),
   preco_unitario: z.number().min(0),
-  unidade_id: z.number().int(),
+  unidade_id: z.number().int().optional().nullable(), // NOVO: Opcional para o estoque central
   is_permanente: z.boolean().default(false), 
   patrimonio_item: z.string().optional().nullable(), 
 });
 
-// Listar todos os itens (com filtro opcional por unidade)
 export const getAllItems = async (req: Request, res: Response) => {
   try {
-    const { search, unidade_id, is_permanente, page = 1, limit = 10 } = req.query;
+    const { search, unidade_id, is_permanente, categoria, page = 1, limit = 10 } = req.query;
     const where: any = {};
 
     if (search) {
@@ -33,8 +33,11 @@ export const getAllItems = async (req: Request, res: Response) => {
         { codigo_sipac: { contains: String(search) } }
       ];
     }
+    
+    // Filtros adicionais
     if (unidade_id) where.unidade_id = Number(unidade_id);
     if (is_permanente !== undefined) where.is_permanente = is_permanente === 'true';
+    if (categoria) where.categoria = String(categoria);
 
     // Cálculo da paginação
     const skip = (Number(page) - 1) * Number(limit);
@@ -54,7 +57,7 @@ export const getAllItems = async (req: Request, res: Response) => {
 
     const respostaFormatada = itens.map((item: any) => ({
       ...item,
-      unidade_nome: item.unidades_organizacionais?.nome || 'Geral'
+      unidade_nome: item.unidades_organizacionais?.nome || 'Estoque Central (COSUP)'
     }));
 
     res.json({
@@ -72,18 +75,16 @@ export const getAllItems = async (req: Request, res: Response) => {
   }
 };
 
-// Criar um novo item
 export const createItem = async (req: Request, res: Response) => {
   try {
     const data = itemSchema.parse(req.body);
-    const newItem = await prisma.itens.create({ data: data as any }); // as any para evitar delays de tipagem do Prisma
+    const newItem = await prisma.itens.create({ data: data as any }); 
     res.status(201).json(newItem);
   } catch (error) {
     res.status(400).json({ message: 'Dados inválidos.', details: error });
   }
 };
 
-// Atualizar um item existente
 export const updateItem = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
@@ -98,7 +99,6 @@ export const updateItem = async (req: Request, res: Response) => {
   }
 };
 
-// Deletar um item
 export const deleteItem = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {

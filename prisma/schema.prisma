@@ -1,3 +1,5 @@
+// prisma/schema.prisma
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,34 +10,37 @@ datasource db {
 }
 
 model itens {
-  id                     Int                 @id @default(autoincrement())
-  codigo_sipac           String?             @db.VarChar(50)
-  codigo_ref             String?             @db.VarChar(50)
-  pregao                 String?             @db.VarChar(100)
+  id                     Int                    @id @default(autoincrement())
+  codigo_sipac           String?                @db.VarChar(50)
+  codigo_ref             String?                @db.VarChar(50)
+  pregao                 String?                @db.VarChar(100)
   descricao              String
-  quantidade_com_defeito Int                 @default(0)
-  tipo                   String?             @db.VarChar(100)
-  unidade_medida         String              @default("UND") @db.VarChar(20)
-  localizacao            String?             @db.VarChar(100)
+  quantidade_com_defeito Int                    @default(0)
+  tipo                   String?                @db.VarChar(100)
+  // 🚀 Geral #11: Classificação Permanente ou Consumo
+  categoria              String                 @default("Consumo") @db.VarChar(50) 
+  unidade_medida         String                 @default("UND") @db.VarChar(20)
+  localizacao            String?                @db.VarChar(100)
   quantidade             Int
-  preco_unitario         Decimal             @db.Decimal(10, 2)
-  unidade_id             Int
-  is_permanente          Boolean             @default(false)
-  patrimonio_item        String?             @db.VarChar(50)
-  unidades_organizacionais unidades_organizacionais @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  solicitacao_itens solicitacao_itens[]
+  preco_unitario         Decimal                @db.Decimal(10, 2)
+  // 🚀 Geral #3: Tornou-se opcional para permitir estoque central da COSUP
+  unidade_id             Int?                   
+  is_permanente          Boolean                @default(false)
+  patrimonio_item        String?                @db.VarChar(50)
+  
+  unidades_organizacionais unidades_organizacionais? @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  solicitacao_itens        solicitacao_itens[]
 
   @@unique([codigo_sipac, unidade_id])
 }
 
-// 🚀 MODELO DE NOTIFICAÇÕES UNIFICADO E APERFEIÇOADO
 model notificacoes {
   id           Int      @id @default(autoincrement())
   usuario_id   Int
   titulo       String   @db.VarChar(255)
   mensagem     String   @db.Text
   tipo         String   @default("SISTEMA") @db.VarChar(50)
-  link_acao    String?  @db.VarChar(255) // Para botões de clique rápido (Deep link)
+  link_acao    String?  @db.VarChar(255) 
   lida         Boolean  @default(false)
   data_criacao DateTime @default(now()) @db.Timestamptz(6)
 
@@ -56,19 +61,20 @@ model solicitacao_itens {
 }
 
 model solicitacoes {
-  id                     Int                 @id @default(autoincrement())
+  id                     Int                    @id @default(autoincrement())
   usuario_id             Int
   responsavel_usuario_id Int
-  setor_equipamento      String?             @db.VarChar(255)
+  setor_equipamento      String?                @db.VarChar(255)
   numero_glpi            Int
-  patrimonio             String?             @db.VarChar(50)
-  data_solicitacao       DateTime?           @default(now()) @db.Timestamptz(6)
-  status                 String              @default("PENDENTE") @db.VarChar(50)
-  tipo_requisicao        String              @default("PEDIDO") @db.VarChar(20)
-  justificativa          String?             @db.Text
-  numero_pedido_externo  String?             @db.VarChar(100)
-  documento_emitido_em   DateTime?           @db.Timestamptz(6)
+  patrimonio             String?                @db.VarChar(50)
+  data_solicitacao       DateTime?              @default(now()) @db.Timestamptz(6)
+  status                 String                 @default("PENDENTE") @db.VarChar(50)
+  tipo_requisicao        String                 @default("PEDIDO") @db.VarChar(20)
+  justificativa          String?                @db.Text
+  numero_pedido_externo  String?                @db.VarChar(100)
+  documento_emitido_em   DateTime?              @db.Timestamptz(6)
   unidade_id             Int
+  
   solicitacao_itens      solicitacao_itens[]
   usuarios_solicitacoes_responsavel_usuario_idTousuarios usuarios @relation("solicitacoes_responsavel_usuario_idTousuarios", fields: [responsavel_usuario_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   unidades_organizacionais unidades_organizacionais @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -76,21 +82,22 @@ model solicitacoes {
 }
 
 model unidades_organizacionais {
-  id                     Int                     @id @default(autoincrement())
-  nome                   String                  @unique @db.VarChar(255)
-  sigla                  String?                 @unique @db.VarChar(20)
-  campus                 String?                 @db.VarChar(100)
-  data_criacao           DateTime?               @default(now()) @db.Timestamptz(6)
+  id                     Int                    @id @default(autoincrement())
+  nome                   String                 @unique @db.VarChar(255)
+  sigla                  String?                @unique @db.VarChar(20)
+  campus                 String?                @db.VarChar(100)
+  data_criacao           DateTime?              @default(now()) @db.Timestamptz(6)
+  
   atendimentos           AtendimentoImpressora[]
-  impressoes_originais   ImpressaoForaUnidade[]  @relation("UnidadeOriginal")
-  impressoes_temporarias ImpressaoForaUnidade[]  @relation("UnidadeTemporaria")
+  impressoes_originais   ImpressaoForaUnidade[] @relation("UnidadeOriginal")
+  impressoes_temporarias ImpressaoForaUnidade[] @relation("UnidadeTemporaria")
   impressoras            Impressora[]
   itens                  itens[]
   solicitacoes           solicitacoes[]
   usuarios               usuarios[]
   bens                   BemPatrimonial[]
-  movimentacoes_origem  MovimentacaoBem[] @relation("OrigemBem")
-  movimentacoes_destino MovimentacaoBem[] @relation("DestinoBem")
+  movimentacoes_origem   MovimentacaoBem[]      @relation("OrigemBem")
+  movimentacoes_destino  MovimentacaoBem[]      @relation("DestinoBem")
 }
 
 model usuarios {
@@ -105,46 +112,58 @@ model usuarios {
   telegram_token                                         String?                 @unique @db.VarChar(100)
   notificacoes_app                                       Boolean                 @default(true)
   notificacoes_bot                                       Boolean                 @default(true)
-
   unidade_id                                             Int?
   data_criacao                                           DateTime?               @default(now()) @db.Timestamptz(6)
+  
   atendimentos_criados                                   AtendimentoImpressora[]
   requisicoes_suprimentos                                ControleSuprimentos[]
   impressoes_fora_unidade                                ImpressaoForaUnidade[]
-  manutencoes_eletronicas                                manutencao_eletronica[]
   notificacoes                                           notificacoes[]
   preferencias_notificacao                               Json?
-  solicitacoes_solicitacoes_responsavel_usuario_idTousuarios solicitacoes[]            @relation("solicitacoes_responsavel_usuario_idTousuarios")
-  solicitacoes_solicitacoes_usuario_idTousuarios             solicitacoes[]            @relation("solicitacoes_usuario_idTousuarios")
-  unidades_organizacionais                                   unidades_organizacionais? @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  atribuicoes_bens                                           AtribuicaoTecnico[]
+  
+  // Relações Patrimônio
+  atribuicoes_bens                                       AtribuicaoTecnico[]
+  historico_patrimonio_realizado                         HistoricoPatrimonio[]   @relation("usuario_acao")
+  historico_patrimonio_tecnico                           HistoricoPatrimonio[]   @relation("tecnico_envolvido")
+  
+  // Relações Eletrônica e Solicitações
+  manutencoes_eletronicas                                manutencao_eletronica[] @relation("tecnico_responsavel")
+  manutencoes_abertas                                    manutencao_eletronica[] @relation("manutencao_aberto_por")
+  solicitacoes_solicitacoes_responsavel_usuario_idTousuarios solicitacoes[]      @relation("solicitacoes_responsavel_usuario_idTousuarios")
+  solicitacoes_solicitacoes_usuario_idTousuarios         solicitacoes[]          @relation("solicitacoes_usuario_idTousuarios")
+  unidades_organizacionais                               unidades_organizacionais? @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model manutencao_eletronica {
   id                     Int              @id @default(autoincrement())
   glpi                   String?          @db.VarChar(50)
   tecnico_responsavel_id Int
+  // 🚀 Eletrônica #7: Quem abriu o chamado
+  aberto_por_id          Int?             
   equipamento            String           @db.VarChar(255)
   descricao_problema     String
   data_entrada           DateTime         @default(now())
   status                 StatusManutencao @default(Pendente)
   laudo_tecnico          String?
-  usuarios               usuarios         @relation(fields: [tecnico_responsavel_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  
+  usuarios               usuarios         @relation("tecnico_responsavel", fields: [tecnico_responsavel_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  aberto_por             usuarios?        @relation("manutencao_aberto_por", fields: [aberto_por_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model Impressora {
-  id                     Int                     @id @default(autoincrement())
-  nome                   String                  @db.VarChar(150)
-  modelo                 String                  @db.VarChar(100)
-  numero_serie           String                  @unique @db.VarChar(100)
-  ip                     String?                 @unique @db.VarChar(45)
-  localizacao            String                  @db.VarChar(255)
-  servidor               String?                 @db.VarChar(100)
-  politicas_aplicadas    Boolean                 @default(false)
-  status_verificacao     String                  @default("Não Verificado") @db.VarChar(50)
+  id                     Int                    @id @default(autoincrement())
+  nome                   String                 @db.VarChar(150)
+  modelo                 String                 @db.VarChar(100)
+  numero_serie           String                 @unique @db.VarChar(100)
+  ip                     String?                @unique @db.VarChar(45)
+  localizacao            String                 @db.VarChar(255)
+  servidor               String?                @db.VarChar(100)
+  politicas_aplicadas    Boolean                @default(false)
+  status_verificacao     String                 @default("Não Verificado") @db.VarChar(50)
   unidade_id             Int
-  ativo                  Boolean                 @default(true)
-  is_colorida            Boolean                 @default(false)
+  ativo                  Boolean                @default(true)
+  is_colorida            Boolean                @default(false)
+  
   atendimentos           AtendimentoImpressora[]
   solicitacoes_suprimentos ControleSuprimentos[]
   unidades_organizacionais unidades_organizacionais @relation(fields: [unidade_id], references: [id])
@@ -174,6 +193,7 @@ model AtendimentoImpressora {
   impressora_id                Int
   tecnico_id                   Int
   data_visita                  DateTime?                @db.Date
+  
   impressora                   Impressora               @relation(fields: [impressora_id], references: [id])
   tecnico                      usuarios                 @relation(fields: [tecnico_id], references: [id])
   unidades_organizacionais     unidades_organizacionais @relation(fields: [unidade_id], references: [id])
@@ -188,6 +208,7 @@ model ImpressaoForaUnidade {
   unidade_original_id   Int
   unidade_temporaria_id Int
   atendimento_id        Int?
+  
   atendimento           AtendimentoImpressora?   @relation(fields: [atendimento_id], references: [id])
   unidade_original      unidades_organizacionais @relation("UnidadeOriginal", fields: [unidade_original_id], references: [id])
   unidade_temporaria    unidades_organizacionais @relation("UnidadeTemporaria", fields: [unidade_temporaria_id], references: [id])
@@ -215,6 +236,7 @@ model ControleSuprimentos {
   toner_amarelo_solicitados  Int        @default(0)
   tecnico_id                 Int
   impressora_id              Int
+  
   impressora                 Impressora @relation(fields: [impressora_id], references: [id])
   tecnico                    usuarios   @relation(fields: [tecnico_id], references: [id])
 }
@@ -246,10 +268,11 @@ model BemPatrimonial {
   unidade_id         Int
   data_importacao    DateTime @default(now())
 
-  unidade            unidades_organizacionais @relation(fields: [unidade_id], references: [id])
+  unidade            unidades_organizacionais  @relation(fields: [unidade_id], references: [id])
   atribuicoes        AtribuicaoTecnico[]
   movimentacoes      MovimentacaoBem[]
   conferencias       ConferenciaLevantamento[]
+  historicos         HistoricoPatrimonio[]
 }
 
 model AtribuicaoTecnico {
@@ -264,6 +287,21 @@ model AtribuicaoTecnico {
   tecnico         usuarios       @relation(fields: [tecnico_id], references: [id])
 }
 
+// 🚀 Novo modelo para auditoria e histórico de bens (Inventário #1 e #2)
+model HistoricoPatrimonio {
+  id             Int            @id @default(autoincrement())
+  bem_id         Int
+  usuario_id     Int            // Quem executou a ação no sistema
+  tecnico_id     Int?           // Técnico alvo da ação (se aplicável)
+  acao           String         @db.VarChar(100) // "Atribuição", "Devolução", "Transferência"
+  detalhes       String?        @db.Text
+  data_registro  DateTime       @default(now()) @db.Timestamptz(6)
+
+  bem            BemPatrimonial @relation(fields: [bem_id], references: [id], onDelete: Cascade)
+  usuario_acao   usuarios       @relation("usuario_acao", fields: [usuario_id], references: [id])
+  tecnico_alvo   usuarios?      @relation("tecnico_envolvido", fields: [tecnico_id], references: [id])
+}
+
 model MovimentacaoBem {
   id                 Int       @id @default(autoincrement())
   bem_id             Int
@@ -274,16 +312,16 @@ model MovimentacaoBem {
   data_envio         DateTime  @default(now()) @db.Timestamptz(6)
   data_recebimento   DateTime? @db.Timestamptz(6)
   
-  bem                BemPatrimonial           @relation(fields: [bem_id], references: [id])
-  unidade_origem     unidades_organizacionais @relation("OrigemBem", fields: [origem_unidade_id], references: [id])
+  bem                BemPatrimonial            @relation(fields: [bem_id], references: [id])
+  unidade_origem     unidades_organizacionais  @relation("OrigemBem", fields: [origem_unidade_id], references: [id])
   unidade_destino    unidades_organizacionais? @relation("DestinoBem", fields: [destino_unidade_id], references: [id])
 }
 
 model LevantamentoPatrimonial {
-  id          Int       @id @default(autoincrement())
-  data_inicio DateTime  @default(now())
-  data_fim    DateTime?
-  status      String    @default("Aberto")
+  id           Int       @id @default(autoincrement())
+  data_inicio  DateTime  @default(now())
+  data_fim     DateTime?
+  status       String    @default("Aberto")
 
   conferencias ConferenciaLevantamento[]
 }

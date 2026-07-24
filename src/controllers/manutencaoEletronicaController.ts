@@ -8,7 +8,7 @@ const prisma = new PrismaClient();
 
 const manutencaoSchema = z.object({
   glpi: z.string().optional(),
-  tecnico_responsavel_id: z.number().int(),
+  tecnico_responsavel_id: z.number().int().optional(), // Tornado opcional, pois o criador pode não saber quem vai assumir
   equipamento: z.string().min(1, "O nome do equipamento é obrigatório."),
   descricao_problema: z.string().min(1, "A descrição do problema é obrigatória."),
 });
@@ -16,17 +16,36 @@ const manutencaoSchema = z.object({
 export const createManutencao = async (req: Request, res: Response) => {
   try {
     const data = manutencaoSchema.parse(req.body);
-    const novaManutencao = await prisma.manutencao_eletronica.create({ data });
-    await dispararNotificacao({
-      usuario_id: novaManutencao.tecnico_responsavel_id,
-      titulo: '🔧 Novo Equipamento na Bancada',
-      mensagem: `O equipamento *${novaManutencao.equipamento}* foi-lhe atribuído para reparo.\n\n⚠️ Problema relatado: ${novaManutencao.descricao_problema}`,
-      tipo: 'alerta',
-      link_acao: '/fila-manutencao-eletronica'
+    const usuarioLogadoId = req.user!.id; // Pega o ID de quem está criando o chamado
+    
+    // 🚀 Eletrônica #7: Grava quem abriu o chamado
+    const payloadParaBanco: any = {
+      ...data,
+      aberto_por_id: usuarioLogadoId
+    };
+
+    // Se o frontend enviar um tecnico_responsavel_id inválido ou vazio, cai para o admin padrão (ou para ninguém)
+    if (!data.tecnico_responsavel_id) {
+       payloadParaBanco.tecnico_responsavel_id = usuarioLogadoId; // Atribui temporariamente a quem abriu
+    }
+
+    const novaManutencao = await prisma.manutencao_eletronica.create({ 
+      data: payloadParaBanco 
     });
+
+    if (novaManutencao.tecnico_responsavel_id !== usuarioLogadoId) {
+      await dispararNotificacao({
+        usuario_id: novaManutencao.tecnico_responsavel_id,
+        titulo: '🔧 Novo Equipamento na Bancada',
+        mensagem: `O equipamento *${novaManutencao.equipamento}* foi-lhe atribuído para reparo.\n\n⚠️ Problema relatado: ${novaManutencao.descricao_problema}`,
+        tipo: 'alerta',
+        link_acao: '/fila-manutencao-eletronica'
+      });
+    }
+
     res.status(201).json(novaManutencao);
   } catch (error) {
-    console.error("Erro ao criar manutenção:", error); // Log de erro
+    console.error("Erro ao criar manutenção:", error); 
     res.status(400).json({ message: 'Dados inválidos.', details: error });
   }
 };
@@ -34,11 +53,15 @@ export const createManutencao = async (req: Request, res: Response) => {
 export const getAllManutencoes = async (req: Request, res: Response) => {
   try {
     const manutencoes = await prisma.manutencao_eletronica.findMany({
-      orderBy: { data_entrada: 'asc' },
+      orderBy: { data_entrada: 'desc' }, // Alterado para 'desc' para vir o mais novo primeiro (Eletrônica #6 - Reforço no Back)
       include: {
         usuarios: {
           select: { nome_completo: true },
         },
+        // 🚀 Eletrônica #7: Retorna os dados de quem abriu o chamado para a UI
+        aberto_por: {
+          select: { nome_completo: true }
+        }
       },
     });
     res.json(manutencoes);
@@ -63,6 +86,8 @@ export const updateStatusManutencao = async (req: Request, res: Response) => {
       where: { id: Number(id) },
       data: { status },
     });
+    
+    // Se o técnico da bancada não for quem mudou o status, ou se foi quem abriu, notifica os envolvidos
     if (manutencaoDb && manutencaoDb.tecnico_responsavel_id !== idUsuarioAcao) {
       await dispararNotificacao({
         usuario_id: manutencaoDb.tecnico_responsavel_id,
@@ -72,18 +97,31 @@ export const updateStatusManutencao = async (req: Request, res: Response) => {
         link_acao: '/fila-manutencao-eletronica'
       });
     }
+
+    if (manutencaoDb && manutencaoDb.aberto_por_id && manutencaoDb.aberto_por_id !== idUsuarioAcao) {
+        await dispararNotificacao({
+          usuario_id: manutencaoDb.aberto_por_id,
+          titulo: '🔄 Status de Bancada Alterado',
+          mensagem: `A manutenção do seu equipamento *${manutencaoDb.equipamento}* mudou para: *${status}*.`,
+          tipo: status === 'Concluido' ? 'sucesso' : 'info',
+          link_acao: '/fila-manutencao-eletronica'
+        });
+    }
+
     res.json(manutencao);
   } catch (error) {
-    console.error("Erro ao atualizar status de manutenção:", error); // Log de erro
+    console.error("Erro ao atualizar status de manutenção:", error); 
     res.status(500).json({ message: 'Erro ao atualizar o status.' });
   }
 };
 
 export const iniciarManutencao = async (req: Request, res: Response) => {
   const { id } = req.params;
-  const tecnicoId = req.user!.id; // ID do técnico logado
+  const tecnicoId = req.user!.id; 
 
   try {
+    const manutencaoDb = await prisma.manutencao_eletronica.findUnique({ where: { id: Number(id) }});
+    
     const manutencao = await prisma.manutencao_eletronica.update({
       where: { id: Number(id) },
       data: { 
@@ -91,6 +129,18 @@ export const iniciarManutencao = async (req: Request, res: Response) => {
         status: 'Em_manutencao' 
       },
     });
+
+    // Avisa quem abriu o chamado que o técnico começou a mexer
+    if (manutencaoDb?.aberto_por_id) {
+        await dispararNotificacao({
+          usuario_id: manutencaoDb.aberto_por_id,
+          titulo: '🛠️ Equipamento em Bancada',
+          mensagem: `O técnico assumiu o reparo do seu equipamento *${manutencaoDb.equipamento}*.`,
+          tipo: 'info',
+          link_acao: '/fila-manutencao-eletronica'
+        });
+    }
+
     res.json(manutencao);
   } catch (error) {
     res.status(500).json({ message: 'Erro ao iniciar manutenção.' });
@@ -114,7 +164,8 @@ export const finalizarManutencao = async (req: Request, res: Response) => {
       },
       include: { usuarios: { select: { nome_completo: true } } }
     });
-    // Atualiza o status do equipamento para "Ativo" após conclusão
+    
+    // Avisa o gerente e quem abriu o chamado
     const gerentes = await prisma.usuarios.findMany({
       where: { role: 'gerente' }
     });
@@ -129,6 +180,16 @@ export const finalizarManutencao = async (req: Request, res: Response) => {
       });
     }
 
+    if (manutencao.aberto_por_id) {
+        await dispararNotificacao({
+          usuario_id: manutencao.aberto_por_id,
+          titulo: '✅ O Seu Equipamento Foi Reparado',
+          mensagem: `O conserto do equipamento *${manutencao.equipamento}* foi finalizado.\n\n📝 Parecer Técnico: ${laudo_tecnico}`,
+          tipo: 'sucesso',
+          link_acao: '/fila-manutencao-eletronica'
+        });
+    }
+
     res.json(manutencao);
   } catch (error) {
     res.status(500).json({ message: 'Erro ao finalizar manutenção.' });
@@ -138,10 +199,9 @@ export const finalizarManutencao = async (req: Request, res: Response) => {
 export const editarManutencao = async (req: Request, res: Response) => {
   const { id } = req.params;
   const { equipamento, descricao_problema, laudo_tecnico } = req.body;
-  const idUsuarioAcao = req.user!.id; // Pega o ID de quem está a clicar em "Salvar"
+  const idUsuarioAcao = req.user!.id; 
 
   try {
-    // Busca os dados de quem está a editar e da manutenção original
     const [usuarioAcao, manutencaoAtual] = await Promise.all([
       prisma.usuarios.findUnique({ where: { id: idUsuarioAcao } }),
       prisma.manutencao_eletronica.findUnique({ where: { id: Number(id) } })
@@ -151,7 +211,6 @@ export const editarManutencao = async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'Manutenção não encontrada.' });
     }
 
-    // Lógica de Auditoria: Só adiciona a assinatura se o texto for alterado
     let novaDescricao = descricao_problema;
     if (descricao_problema && descricao_problema !== manutencaoAtual.descricao_problema) {
         novaDescricao = `${descricao_problema}\n\n[✏️ Editado por ${usuarioAcao?.nome_completo} em ${new Date().toLocaleString('pt-BR')}]`;
@@ -162,7 +221,6 @@ export const editarManutencao = async (req: Request, res: Response) => {
         novoLaudo = `${laudo_tecnico}\n\n[✏️ Editado por ${usuarioAcao?.nome_completo} em ${new Date().toLocaleString('pt-BR')}]`;
     }
 
-    //  Salva no Banco de Dados
     const manutencao = await prisma.manutencao_eletronica.update({
       where: { id: Number(id) },
       data: { 
@@ -172,7 +230,6 @@ export const editarManutencao = async (req: Request, res: Response) => {
        },
     });
 
-    // Se quem editou NÃO for o técnico que está a reparar a máquina, avisa-o!
     if (manutencao.tecnico_responsavel_id !== idUsuarioAcao) {
       await dispararNotificacao({
         usuario_id: manutencao.tecnico_responsavel_id,
