@@ -28,7 +28,6 @@ const atendimentoCreateSchema = z.object({
   tecnico_id: z.number().int(),
 });
 
-
 const atendimentoUpdateSchema = z.object({
   status: z.nativeEnum(StatusAtendimento).optional(),
   setor_visitado: z.boolean().optional(),
@@ -44,14 +43,14 @@ const atendimentoUpdateSchema = z.object({
   backup_impressora_modelo: z.string().nullable().optional(),
   backup_numero_serie: z.string().nullable().optional(),
   backup_ip: z.string().nullable().optional(),
-  // Converte strings de data (ou strings vazias) para Date ou null
   data_visita: z.preprocess((arg) => (arg ? new Date(arg as string) : null), z.date().nullable()).optional(),
   backup_data_disponibilizacao: z.preprocess((arg) => (arg ? new Date(arg as string) : null), z.date().nullable()).optional(),
   backup_data_retirada: z.preprocess((arg) => (arg ? new Date(arg as string) : null), z.date().nullable()).optional(),
 }).partial();
 
-
-
+// ==========================================
+// IMPRESSORAS
+// ==========================================
 
 export const getAllImpressoras = async (req: Request, res: Response) => {
     const { ip, numero_serie, unidade_id_filtro, politicas_aplicadas } = req.query;
@@ -114,7 +113,9 @@ export const deleteImpressora = async (req: Request, res: Response) => {
     }
 };
 
-
+// ==========================================
+// CONTROLE DE SAÍDAS (REQUISIÇÕES)
+// ==========================================
 
 export const getControleSuprimentos = async (req: Request, res: Response) => {
     try {
@@ -177,7 +178,9 @@ export const createControleSuprimentos = async (req: Request, res: Response) => 
     }
 };
 
-
+// ==========================================
+// ESTOQUE E HISTÓRICO DE ENTRADAS
+// ==========================================
 
 export const getEstoqueSuprimentos = async (req: Request, res: Response) => {
     try {
@@ -197,17 +200,45 @@ export const getEstoqueSuprimentos = async (req: Request, res: Response) => {
 
 export const addEstoqueSuprimentos = async (req: Request, res: Response) => {
     const { unidade_imagem_total, toner_preto_total, toner_ciano_total, toner_magenta_total, toner_amarelo_total } = req.body;
+    const usuarioId = req.user!.id; // ID do técnico ou gerente adicionando
+    
     try {
-        const estoqueAtualizado = await prisma.estoqueSuprimentos.update({
-            where: { id: 1 },
-            data: {
-                unidade_imagem_total: { increment: Number(unidade_imagem_total) || 0 },
-                toner_preto_total: { increment: Number(toner_preto_total) || 0 },
-                toner_ciano_total: { increment: Number(toner_ciano_total) || 0 },
-                toner_magenta_total: { increment: Number(toner_magenta_total) || 0 },
-                toner_amarelo_total: { increment: Number(toner_amarelo_total) || 0 },
-            }
+        // Transação para adicionar o estoque e gravar o log no histórico simultaneamente
+        const estoqueAtualizado = await prisma.$transaction(async (tx) => {
+            const updated = await tx.estoqueSuprimentos.update({
+                where: { id: 1 },
+                data: {
+                    unidade_imagem_total: { increment: Number(unidade_imagem_total) || 0 },
+                    toner_preto_total: { increment: Number(toner_preto_total) || 0 },
+                    toner_ciano_total: { increment: Number(toner_ciano_total) || 0 },
+                    toner_magenta_total: { increment: Number(toner_magenta_total) || 0 },
+                    toner_amarelo_total: { increment: Number(toner_amarelo_total) || 0 },
+                }
+            });
+
+            // Função auxiliar para gravar no histórico apenas o que foi > 0
+            const registrarHistorico = async (cor: string, qtd: number) => {
+                if (qtd > 0) {
+                    await tx.historicoSuprimento.create({
+                        data: {
+                            usuario_id: usuarioId,
+                            cor: cor,
+                            tipo_acao: 'ENTRADA',
+                            quantidade_adicionada: qtd
+                        }
+                    });
+                }
+            };
+
+            await registrarHistorico('unidade_imagem', Number(unidade_imagem_total) || 0);
+            await registrarHistorico('preto', Number(toner_preto_total) || 0);
+            await registrarHistorico('ciano', Number(toner_ciano_total) || 0);
+            await registrarHistorico('magenta', Number(toner_magenta_total) || 0);
+            await registrarHistorico('amarelo', Number(toner_amarelo_total) || 0);
+
+            return updated;
         });
+
         res.json(estoqueAtualizado);
     } catch (error) {
         console.error("Erro ao atualizar estoque de suprimentos:", error);
@@ -215,8 +246,104 @@ export const addEstoqueSuprimentos = async (req: Request, res: Response) => {
     }
 };
 
+export const getHistoricoEntradas = async (req: Request, res: Response) => {
+  try {
+    const historico = await prisma.historicoSuprimento.findMany({
+      where: { tipo_acao: 'ENTRADA' }, 
+      include: {
+        usuario: { select: { nome_completo: true, email: true } }
+      },
+      orderBy: { data: 'desc' },
+      take: 50 // Limita para não pesar o frontend
+    });
 
+    return res.status(200).json(historico);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Erro ao buscar o histórico de entradas.' });
+  }
+};
 
+// Corrigir Estoque (Exclusivo para Gestores na Rota)
+export const corrigirEstoque = async (req: Request, res: Response) => {
+  const { cor, novaQuantidade, justificativa } = req.body;
+  const usuarioId = req.user!.id; 
+
+  if (!cor || novaQuantidade === undefined || !justificativa) {
+    return res.status(400).json({ message: 'Cor, nova quantidade e justificativa são obrigatórios.' });
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      const estoqueAtual = await tx.estoqueSuprimentos.findUnique({ where: { id: 1 } });
+      if (!estoqueAtual) throw new Error('Inventário de estoque não inicializado.');
+
+      // Mapeamento dinâmico para a coluna correta da tabela
+      let campoCor = '';
+      switch (cor) {
+          case 'preto': campoCor = 'toner_preto_total'; break;
+          case 'ciano': campoCor = 'toner_ciano_total'; break;
+          case 'magenta': campoCor = 'toner_magenta_total'; break;
+          case 'amarelo': campoCor = 'toner_amarelo_total'; break;
+          case 'unidade_imagem': campoCor = 'unidade_imagem_total'; break;
+          default: throw new Error('Cor inválida.');
+      }
+
+      const qtdAnterior = (estoqueAtual as any)[campoCor];
+
+      // Atualiza o valor real (substituição absoluta em vez de incremento)
+      await tx.estoqueSuprimentos.update({
+        where: { id: 1 },
+        data: { [campoCor]: Number(novaQuantidade) }
+      });
+
+      // Salva o LOG da correção no Histórico
+      await tx.historicoSuprimento.create({
+        data: {
+          usuario_id: usuarioId,
+          cor: cor,
+          tipo_acao: 'CORRECAO',
+          quantidade_anterior: qtdAnterior,
+          quantidade_nova: Number(novaQuantidade),
+          justificativa: justificativa
+        }
+      });
+    });
+
+    return res.status(200).json({ message: 'Estoque corrigido com sucesso!' });
+  } catch (error: any) {
+    console.error(error);
+    return res.status(500).json({ message: error.message || 'Erro ao corrigir estoque.' });
+  }
+};
+
+// Reportar Erro (Técnicos)
+export const reportarErroEstoque = async (req: Request, res: Response) => {
+  const { mensagem } = req.body;
+  const usuarioId = req.user!.id;
+
+  if (!mensagem) {
+    return res.status(400).json({ message: 'A mensagem da divergência é obrigatória.' });
+  }
+
+  try {
+    await prisma.reporteErroEstoque.create({
+      data: {
+        usuario_id: usuarioId,
+        mensagem: mensagem
+      }
+    });
+
+    return res.status(201).json({ message: 'Divergência reportada com sucesso aos gestores.' });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Erro ao registrar o reporte.' });
+  }
+};
+
+// ==========================================
+// ATENDIMENTOS (ORDENS DE SERVIÇO DE IMPRESSORAS)
+// ==========================================
 
 export const getAtendimentos = async (req: Request, res: Response) => {
     try {
@@ -243,7 +370,6 @@ export const createAtendimento = async (req: Request, res: Response) => {
         res.status(400).json({ message: 'Erro de validação ao criar atendimento.', details: error });
     }
 };
-
 
 export const updateAtendimento = async (req: Request, res: Response) => {
     const { id } = req.params;

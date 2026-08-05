@@ -11,8 +11,19 @@ const prisma = new PrismaClient();
 const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
 export const bot = telegramToken ? new TelegramBot(telegramToken, { polling: true }) : null;
 
-// Lógica de Deep Linking (Conexão Silenciosa do Bot)
+// URL Base do Frontend Dinâmica (Evita links mortos em Produção)
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+
 if (bot) {
+  // SILENCIADOR DE ERROS 502 (Resolve o log infinito no console)
+  bot.on('polling_error', (error: any) => {
+    // Só mostra o erro se NÃO for o 502 (Bad Gateway) do Telegram
+    if (error?.response?.statusCode !== 502 && error.code !== 'ETELEGRAM') {
+      console.error('Erro interno no Bot do Telegram:', error.message);
+    }
+  });
+
+  // Lógica de Deep Linking (Conexão Silenciosa do Bot)
   bot.onText(/\/start (.+)/, async (msg, match) => {
     const chatId = msg.chat.id.toString();
     const tokenSecreto = match ? match[1] : null;
@@ -26,12 +37,17 @@ if (bot) {
             where: { id: usuario.id },
             data: { telegram_chat_id: chatId, telegram_token: null }
           });
-          bot.sendMessage(chatId, `✅ *Bem-vindo(a), ${usuario.nome_completo}!* \nO seu Telegram foi vinculado com sucesso ao Gestio. Passará a receber alertas importantes aqui.`, { parse_mode: 'Markdown' });
+          bot.sendMessage(
+            chatId, 
+            `✅ *Bem-vindo(a), ${usuario.nome_completo}!* \n\nO seu Telegram foi vinculado com sucesso ao *Gestio*. A partir de agora, os seus alertas de Ordens de Serviço, Estoque e Atribuições de Patrimônio chegarão diretamente aqui de forma instantânea. 🚀`, 
+            { parse_mode: 'Markdown' }
+          );
         } else {
-          bot.sendMessage(chatId, '❌ Link de conexão inválido ou já expirado.');
+          bot.sendMessage(chatId, '❌ Link de conexão inválido ou o seu perfil já foi vinculado noutro dispositivo. Gere um novo link no painel do sistema.');
         }
       } catch (err) {
         console.error('Erro na conexão do bot:', err);
+        bot.sendMessage(chatId, '⚠️ Ocorreu um erro interno ao tentar vincular a sua conta.');
       }
     }
   });
@@ -72,8 +88,7 @@ export const dispararNotificacao = async (dados: {
       const icones: Record<string, string> = { 'info': 'ℹ️', 'alerta': '⚠️', 'sucesso': '✅', 'erro': '❌' };
       const icone = icones[dados.tipo.toLowerCase()] || '🔔';
 
-      const urlFrontend = 'http://localhost:5173';
-      const texto = `${icone} *${dados.titulo}*\n\n${dados.mensagem}${dados.link_acao ? `\n\n🔗 [Acessar no Sistema](${urlFrontend}${dados.link_acao})` : ''}`;
+      const texto = `${icone} *${dados.titulo}*\n\n${dados.mensagem}${dados.link_acao ? `\n\n🔗 [Acessar no Sistema](${FRONTEND_URL}${dados.link_acao})` : ''}`;
       
       await bot.sendMessage(usuario.telegram_chat_id, texto, { parse_mode: 'Markdown' });
     }
@@ -82,7 +97,7 @@ export const dispararNotificacao = async (dados: {
   }
 };
 
-//  ENDPOINTS HTTP PARA O FRONTEND
+// ENDPOINTS HTTP PARA O FRONTEND
 export const getNotificacoes = async (req: Request, res: Response) => {
   try {
     const usuarioId = req.user!.id;
