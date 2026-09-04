@@ -12,6 +12,8 @@ import impressoraRoutes from './routes/impressoraRoutes';
 import notificacaoRoutes from './routes/notificacaoRoutes';
 import estatisticasRoutes from './routes/estatisticasRoutes';
 import patrimonioRoutes from './routes/patrimonioRoutes'; 
+import servicosRoutes from './routes/servicosRoutes';
+import analiseRoutes from './routes/analiseRoutes';
 
 import path from 'path';
 import fs from 'fs';
@@ -35,6 +37,9 @@ app.use('/api/gestao-impressoras', impressoraRoutes);
 app.use('/api/notificacoes', notificacaoRoutes);
 app.use('/api/estatisticas', estatisticasRoutes);
 app.use('/api/patrimonio', patrimonioRoutes);
+app.use('/api/servicos', servicosRoutes);
+app.use('/api/analise', analiseRoutes);
+
 
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 

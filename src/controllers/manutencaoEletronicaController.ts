@@ -10,6 +10,7 @@ const manutencaoSchema = z.object({
   glpi: z.string().optional(),
   tecnico_responsavel_id: z.number().int().optional(), // Tornado opcional, pois o criador pode não saber quem vai assumir
   equipamento: z.string().min(1, "O nome do equipamento é obrigatório."),
+   patrimonio: z.string().min(1, "O patrimônio é obrigatório."),
   descricao_problema: z.string().min(1, "A descrição do problema é obrigatória."),
 });
 

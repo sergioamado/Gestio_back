@@ -341,21 +341,37 @@ export const reportarErroEstoque = async (req: Request, res: Response) => {
   }
 };
 
-// ==========================================
 // ATENDIMENTOS (ORDENS DE SERVIÇO DE IMPRESSORAS)
-// ==========================================
 
 export const getAtendimentos = async (req: Request, res: Response) => {
     try {
+        //  Buscar sem falhar na relação do nome
         const atendimentos = await prisma.atendimentoImpressora.findMany({ 
             include: { 
                 impressora: { select: { nome: true, modelo: true, localizacao: true } }, 
-                tecnico : { select: { nome_completo: true } }
             },
             orderBy: { data: 'desc' }
         });
-        res.json(atendimentos);
+
+        //  Buscar manualmente os nomes dos técnicos
+        const tecnicoIds = [...new Set(atendimentos.map(a => a.tecnico_id))];
+        const tecnicos = await prisma.usuarios.findMany({
+            where: { id: { in: tecnicoIds } },
+            select: { id: true, nome_completo: true }
+        });
+
+        //  Mesclar os dados e enviar a estrutura exata que o Frontend  espera
+        const atendimentosFormatados = atendimentos.map(atendimento => {
+            const tecnicoReal = tecnicos.find(t => t.id === atendimento.tecnico_id);
+            return {
+                ...atendimento,
+                tecnico: tecnicoReal ? { nome_completo: tecnicoReal.nome_completo } : { nome_completo: 'Técnico Desconhecido' }
+            };
+        });
+
+        res.json(atendimentosFormatados);
     } catch (error) {
+        console.error("Erro no getAtendimentos:", error);
         res.status(500).json({ message: "Erro ao buscar atendimentos." });
     }
 };

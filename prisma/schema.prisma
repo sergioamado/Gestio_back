@@ -15,15 +15,18 @@ model itens {
   codigo_ref             String? @db.VarChar(50)
   pregao                 String? @db.VarChar(100)
   descricao              String
+  quantidade_teste       Int     @default(0) // Estoque separado para Teste/Empréstimo
   quantidade_com_defeito Int     @default(0)
-  tipo                   String? @db.VarChar(100)
-  // 🚀 Geral #11: Classificação Permanente ou Consumo
+  quantidade_estoque     Int     @default(0) // Estoque Principal (Consumo definitivo)
+  quantidade_defeito     Int      @default(0) // Peças queimadas/devolvidas (aguardando descarte)
+  localizacao_teste  String?  // Ex: "Armário B - Prateleira 2"
+  tipo                   String? @db.VarChar(100)  //  Classificação Permanente ou Consumo
   categoria              String  @default("Consumo") @db.VarChar(50)
   unidade_medida         String  @default("UND") @db.VarChar(20)
   localizacao            String? @db.VarChar(100)
   quantidade             Int
   preco_unitario         Decimal @db.Decimal(10, 2)
-  // 🚀 Geral #3: Tornou-se opcional para permitir estoque central da COSUP
+  // Tornou-se opcional para permitir estoque central da COSUP
   unidade_id             Int?
   is_permanente          Boolean @default(false)
   patrimonio_item        String? @db.VarChar(50)
@@ -56,6 +59,7 @@ model solicitacao_itens {
   quantidade_solicitada Int
   status_entrega        String       @default("Pendente") @db.VarChar(50)
   data_entrega          DateTime?    @db.Timestamptz(6)
+  tipo_uso              String    @default("CONSUMO") // "CONSUMO" ou "TESTE"
   itens                 itens        @relation(fields: [item_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   solicitacoes          solicitacoes @relation(fields: [solicitacao_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }
@@ -71,10 +75,10 @@ model solicitacoes {
   status                 String    @default("PENDENTE") @db.VarChar(50)
   tipo_requisicao        String    @default("PEDIDO") @db.VarChar(20)
   justificativa          String?   @db.Text
-  numero_pedido_externo  String?   @db.VarChar(100)
+  numero_pedido_externo  String?   @db.VarChar(100)   // Nº do Chamado Almoxarifado
   documento_emitido_em   DateTime? @db.Timestamptz(6)
   unidade_id             Int
-
+  producao_servico ProducaoServico?
   solicitacao_itens                                      solicitacao_itens[]
   usuarios_solicitacoes_responsavel_usuario_idTousuarios usuarios                 @relation("solicitacoes_responsavel_usuario_idTousuarios", fields: [responsavel_usuario_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   unidades_organizacionais                               unidades_organizacionais @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -114,7 +118,7 @@ model usuarios {
   notificacoes_bot Boolean   @default(true)
   unidade_id       Int?
   data_criacao     DateTime? @default(now()) @db.Timestamptz(6)
-
+  producoes_servico ProducaoServico[]
   atendimentos_criados     AtendimentoImpressora[]
   requisicoes_suprimentos  ControleSuprimentos[]
   impressoes_fora_unidade  ImpressaoForaUnidade[]
@@ -147,7 +151,8 @@ model manutencao_eletronica {
   data_entrada           DateTime         @default(now())
   status                 StatusManutencao @default(Pendente)
   laudo_tecnico          String?
-
+  patrimonio             String?   @db.VarChar(50)
+  producao_servico ProducaoServico?
   usuarios   usuarios  @relation("tecnico_responsavel", fields: [tecnico_responsavel_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   aberto_por usuarios? @relation("manutencao_aberto_por", fields: [aberto_por_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
@@ -195,7 +200,7 @@ model AtendimentoImpressora {
   impressora_id                Int
   tecnico_id                   Int
   data_visita                  DateTime?         @db.Date
-
+  producao_servico ProducaoServico?
   impressora                Impressora               @relation(fields: [impressora_id], references: [id])
   tecnico                   usuarios                 @relation(fields: [tecnico_id], references: [id])
   unidades_organizacionais  unidades_organizacionais @relation(fields: [unidade_id], references: [id])
@@ -368,4 +373,91 @@ model ReporteErroEstoque {
   usuario usuarios @relation(fields: [usuario_id], references: [id])
 
   @@map("reportes_erro_estoque")
+}
+
+
+// MÓDULO: PRECIFICAÇÃO E PRODUTIVIDADE (SERVIÇOS)
+
+model CatalogoServico {
+  id               Int       @id @default(autoincrement())
+  nome_servico     String    // Ex: "Formatação de Computador"
+  categoria        String    // Ex: "Hardware", "Software", "Impressoras"
+  valor_estimado   Decimal   @db.Decimal(10, 2) // O valor que o serviço custaria fora da instituição
+  ativo            Boolean   @default(true)
+  
+  // Relação: Um serviço do catálogo pode ser usado em várias produções
+  producoes        ProducaoServico[]
+}
+
+model ProducaoServico {
+  id                      Int      @id @default(autoincrement())
+  data_registro           DateTime @default(now())
+  
+  // O Técnico que executou a ação
+  tecnico_id              Int
+  tecnico                 usuarios @relation(fields: [tecnico_id], references: [id])
+  
+  // O Serviço executado
+  servico_id              Int
+  servico                 CatalogoServico @relation(fields: [servico_id], references: [id])
+  patrimonio_serie        String?
+  
+  // 🔗 VÍNCULOS COM OS CHAMADOS (Pode ser de 3 tipos diferentes)
+  // Deixamos opcionais porque o serviço pode ser de uma OS, de uma Impressora ou de Eletrónica
+  solicitacao_peca_id     Int?      @unique // Vincula à OS de peças/equipamentos
+  atendimento_impr_id     Int?      @unique // Vincula ao Atendimento de Impressora
+  manutencao_eletr_id     Int?      @unique // Vincula à OS de Eletrónica 
+  numero_glpi             String?
+
+  // RELAÇÕES INVERSAS (Você terá de adicionar ProducaoServico? no modelo destas 3 tabelas acima)
+  solicitacao             solicitacoes?           @relation(fields: [solicitacao_peca_id], references: [id])
+  atendimento_impressora  AtendimentoImpressora?  @relation(fields: [atendimento_impr_id], references: [id])
+  manutencao           manutencao_eletronica?   @relation(fields: [manutencao_eletr_id], references: [id]) // (Descomente se já tiver esta tabela)
+
+  // VALORES SALVOS NO MOMENTO (Para congelar o preço e não mudar no histórico se o catálogo for alterado)
+  valor_servico_aplicado  Decimal   @db.Decimal(10, 2)
+  valor_pecas_aplicado    Decimal   @default(0.00) @db.Decimal(10, 2)
+  valor_total_produzido   Decimal   @db.Decimal(10, 2) // Serviço + Peças
+
+  observacoes             String?   @db.Text
+}
+
+
+// MÓDULO DE BUSINESS INTELLIGENCE (BI) / DASHBOARDS CONFIGURÁVEIS
+
+
+model Dashboard {
+  id           Int               @id @default(autoincrement())
+  nome         String
+  descricao    String?
+  usuario_id   Int?              // ID do gestor/admin que criou o painel
+  publico      Boolean           @default(false) // Se true, outros gestores podem ver
+  configuracao Json?             // Configurações globais (tema escuro/claro, refresh rate)
+  data_criacao DateTime          @default(now())
+
+  widgets      DashboardWidget[]
+
+  // Opcional: Se quiser criar a relação direta com a sua tabela de usuários, 
+  // remova as "//" da linha abaixo (assumindo que a sua tabela se chama 'usuarios'):
+  // usuario      usuarios?        @relation(fields: [usuario_id], references: [id])
+}
+
+model DashboardWidget {
+  id           Int       @id @default(autoincrement())
+  dashboard_id Int
+
+  titulo       String
+  tipo         String    // Identifica o renderizador (ex: "bar", "pie", "line", "kpi", "table")
+  dataset      String    // Identifica o motor de dados (ex: "valor_produzido_tecnico", "estoque_categoria")
+
+  // A JÓIA DA COROA: Guarda as dimensões, métricas e filtros exatos escolhidos
+  configuracao Json      
+
+  // Sistema de Grid (Para permitir arrastar e soltar e redimensionar na tela)
+  posicao_x    Int       @default(0)
+  posicao_y    Int       @default(0)
+  largura      Int       @default(6) // Num grid de 12 colunas, 6 = metade da tela
+  altura       Int       @default(4)
+
+  dashboard    Dashboard @relation(fields: [dashboard_id], references: [id], onDelete: Cascade)
 }

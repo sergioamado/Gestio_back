@@ -5,21 +5,34 @@ import { z } from 'zod';
 
 const prisma = new PrismaClient();
 
-// 🚀 Geral #11 e #3: Schema atualizado com categoria e unidade_id opcional
+
+// VALIDAÇÕES ZOD
+
 const itemSchema = z.object({
   codigo_sipac: z.string().optional().nullable(),
   codigo_ref: z.string().optional().nullable(), 
   pregao: z.string().optional().nullable(),
   descricao: z.string().min(3, "Descrição é obrigatória"),
   tipo: z.string().optional().nullable(),
-  categoria: z.string().default("Consumo"), // NOVO
+  categoria: z.string().default("Consumo"),
   unidade_medida: z.string(),
   localizacao: z.string().optional().nullable(),
-  quantidade: z.number().int().min(0),
   preco_unitario: z.number().min(0),
-  unidade_id: z.number().int().optional().nullable(), // NOVO: Opcional para o estoque central
-  is_permanente: z.boolean().default(false), 
+  
+  // CORREÇÃO 1: O Frontend pode enviar undefined se não for Admin.
+  // O nullable() sozinho as vezes falha se vier vazio.
+  unidade_id: z.number().int().optional().nullable(), 
+  
+  // CORREÇÃO 2: Se o frontend não enviar is_permanente, garantimos o false
+  is_permanente: z.boolean().optional().default(false), 
+  
   patrimonio_item: z.string().optional().nullable(), 
+  
+  // Os nossos novos campos de estoque:
+  quantidade_estoque: z.number().int().nonnegative().default(0),
+  quantidade_teste: z.number().int().nonnegative().default(0),
+  quantidade_defeito: z.number().int().nonnegative().default(0),
+  localizacao_teste: z.string().optional().nullable(), // Invertido a ordem para segurança
 });
 
 export const getAllItems = async (req: Request, res: Response) => {
@@ -36,7 +49,10 @@ export const getAllItems = async (req: Request, res: Response) => {
     
     // Filtros adicionais
     if (unidade_id) where.unidade_id = Number(unidade_id);
-    if (is_permanente !== undefined) where.is_permanente = is_permanente === 'true';
+    // Correção na verificação do is_permanente para aceitar boolean na query
+    if (is_permanente !== undefined && is_permanente !== '') {
+      where.is_permanente = is_permanente === 'true';
+    }
     if (categoria) where.categoria = String(categoria);
 
     // Cálculo da paginação
@@ -80,8 +96,9 @@ export const createItem = async (req: Request, res: Response) => {
     const data = itemSchema.parse(req.body);
     const newItem = await prisma.itens.create({ data: data as any }); 
     res.status(201).json(newItem);
-  } catch (error) {
-    res.status(400).json({ message: 'Dados inválidos.', details: error });
+  } catch (error: any) { // CORREÇÃO: Adicionado :any e log para debug
+    console.error("Erro Zod Create:", error.errors);
+    res.status(400).json({ message: 'Dados inválidos.', details: error.errors });
   }
 };
 
@@ -94,8 +111,9 @@ export const updateItem = async (req: Request, res: Response) => {
       data: data as any,
     });
     res.json(updatedItem);
-  } catch (error) {
-    res.status(400).json({ message: 'Dados inválidos ou item não encontrado.', details: error });
+  } catch (error: any) { // CORREÇÃO: Adicionado :any e log para debug
+    console.error("Erro Zod Update:", error.errors);
+    res.status(400).json({ message: 'Dados inválidos ou item não encontrado.', details: error.errors });
   }
 };
 

@@ -26,9 +26,20 @@ export const getAllSolicitacoes = async (req: Request, res: Response) => {
     const where: any = {};
 
     if (unidade_id) where.unidade_id = Number(unidade_id);
-    if (status) where.status = String(status);
+    if (status) {
+      if (Array.isArray(status)) {
+        where.status = { in: status.map(String) };
+      } else {
+        where.status = String(status);
+      }
+    }
     if (tecnico_id_filtro) where.responsavel_usuario_id = Number(tecnico_id_filtro);
-    if (numero_glpi) where.numero_glpi = Number(numero_glpi);
+    if (numero_glpi){ 
+      const glpiNumero = Number(numero_glpi);
+   if (!isNaN(glpiNumero)) {
+       where.numero_glpi = glpiNumero;
+    }
+  }
 
     const skip = (Number(page) - 1) * Number(limit);
     const take = Number(limit);
@@ -41,25 +52,20 @@ export const getAllSolicitacoes = async (req: Request, res: Response) => {
         include: {
           solicitacao_itens: {
             include: {
-              itens: { select: { descricao: true, is_permanente: true } }
+              itens: { select: { descricao: true, codigo_sipac: true } }
             }
           },
-          usuarios_solicitacoes_responsavel_usuario_idTousuarios: { 
-            select: { nome_completo: true } 
-          }
+          usuarios_solicitacoes_responsavel_usuario_idTousuarios: { select: { nome_completo: true } },
+          usuarios_solicitacoes_usuario_idTousuarios: { select: { nome_completo: true } },
+          unidades_organizacionais: { select: { nome: true, sigla: true } }
         },
         orderBy: { data_solicitacao: 'desc' }
       }),
       prisma.solicitacoes.count({ where: where as any })
     ]);
-    
-    const respostaFormatada = solicitacoes.map((sol: any) => ({
-      ...sol,
-      tecnico_responsavel: sol.usuarios_solicitacoes_responsavel_usuario_idTousuarios?.nome_completo || 'Técnico Removido',
-    }));
 
     res.json({
-      data: respostaFormatada,
+      data: solicitacoes,
       meta: {
         total,
         page: Number(page),
@@ -73,11 +79,12 @@ export const getAllSolicitacoes = async (req: Request, res: Response) => {
   }
 };
 
+
 export const createSolicitacao = async (req: Request, res: Response) => {
   try {
     const validatedData = solicitacaoSchema.parse(req.body);
     const { itens, justificativa, ...solicitacaoData } = validatedData;
-    const usuario_id = req.user!.id; // Quem clicou no botão "Gerar OS"
+    const usuario_id = req.user!.id; 
 
     const novaSolicitacao = await prisma.$transaction(async (tx) => {
       const solicitacao = await tx.solicitacoes.create({
@@ -88,15 +95,24 @@ export const createSolicitacao = async (req: Request, res: Response) => {
            patrimonio: validatedData.patrimonio,
            unidade_id: validatedData.unidade_id,
            tipo_requisicao: validatedData.tipo_requisicao,
-           usuario_id: usuario_id, // Gravando quem realmente solicitou
-           justificativa: validatedData.justificativa
+           usuario_id: usuario_id,
+           justificativa: validatedData.justificativa,
+           status: 'PENDENTE'
          }
        });
 
+      const isTeste = validatedData.tipo_requisicao === 'TESTE';
+
       for (const item of itens) {
         const itemDb = await tx.itens.findUnique({ where: { id: item.id } });
-        if (!itemDb || itemDb.quantidade < item.quantidade) {
-          throw new Error(`Estoque insuficiente para o item: ${itemDb?.descricao || item.id}`);
+        
+        if (!itemDb) throw new Error(`Item não encontrado: ${item.id}`);
+
+        if (isTeste && itemDb.quantidade_teste < item.quantidade) {
+           throw new Error(`Estoque de TESTE insuficiente para: ${itemDb.descricao}`);
+        }
+        if (!isTeste && itemDb.quantidade_estoque < item.quantidade) {
+           throw new Error(`Estoque de CONSUMO insuficiente para: ${itemDb.descricao}`);
         }
 
         await tx.solicitacao_itens.create({
@@ -104,50 +120,119 @@ export const createSolicitacao = async (req: Request, res: Response) => {
             solicitacao_id: solicitacao.id,
             item_id: item.id,
             quantidade_solicitada: item.quantidade,
+            tipo_uso: isTeste ? 'TESTE' : 'CONSUMO',
+            status_entrega: 'Pendente'
           },
         });
 
+        // Abater do estoque correto
         await tx.itens.update({
           where: { id: item.id },
-          data: { quantidade: { decrement: item.quantidade } },
+          data: isTeste 
+            ? { quantidade_teste: { decrement: item.quantidade } }
+            : { quantidade_estoque: { decrement: item.quantidade } }
         });
       }
       return solicitacao;
     });
 
-    // 🚀 NOTIFICAÇÃO: Confirmação de Criação
+    // Notificações...
     await dispararNotificacao({
       usuario_id: usuario_id,
       titulo: '📦 Nova Ordem de Serviço',
-      mensagem: `A sua solicitação (GLPI: ${validatedData.numero_glpi}) foi gerada com sucesso e os itens foram reservados do estoque.`,
-      tipo: 'sucesso',
-      link_acao: '/gerenciar-solicitacoes'
+      mensagem: `Sua solicitação GLPI ${validatedData.numero_glpi} foi gerada (Status: PENDENTE).`,
+      tipo: 'sucesso', link_acao: '/gerenciar-solicitacoes'
     });
-
-    // Alerta para os Gerentes da Unidade
-    const gerentes = await prisma.usuarios.findMany({
-      where: {
-        unidade_id: validatedData.unidade_id,
-        role: 'gerente' // Procura todos os gerentes desta unidade
-      }
-    });
-
-    for (const gerente of gerentes) {
-      await dispararNotificacao({
-        usuario_id: gerente.id,
-        titulo: '🔔 Nova OS Aguardando Aprovação',
-        mensagem: `Uma nova OS (GLPI: ${validatedData.numero_glpi}) foi registada na sua unidade e precisa de análise.`,
-        tipo: 'info',
-        link_acao: '/gerenciar-solicitacoes'
-      });
-    }
 
     res.status(201).json(novaSolicitacao);
   } catch (error: any) {
-    console.error(error);
-    res.status(400).json({ message: error.message || 'Erro ao criar solicitação.' });
+    res.status(400).json({ message: error.message || 'Erro ao criar OS.' });
   }
 };
+
+
+export const updateSolicitacao = async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { status, numero_pedido_externo, justificativa, itens_entrega } = req.body;
+  const idUsuarioAcao = req.user!.id;
+
+  try {
+    const solicitacaoAtual = await prisma.solicitacoes.findUnique({
+      where: { id: Number(id) },
+      include: { solicitacao_itens: true }
+    });
+
+    if (!solicitacaoAtual) return res.status(404).json({ message: 'OS não encontrada.' });
+
+    //  A REGRA INVIOLÁVEL: Verificar Consumo no Fechamento
+    if (status === 'CONCLUIDA') {
+      const consumiuPecas = solicitacaoAtual.solicitacao_itens.some(
+        (item) => item.tipo_uso === 'CONSUMO' && item.status_entrega !== 'Cancelado'
+      );
+      
+      const numeroAlmoxarifado = numero_pedido_externo !== undefined ? numero_pedido_externo : solicitacaoAtual.numero_pedido_externo;
+
+      if (consumiuPecas && (!numeroAlmoxarifado || numeroAlmoxarifado.trim() === '')) {
+        return res.status(400).json({ 
+          bloqueio_regra: true,
+          message: '⛔ REGRA INVIOLÁVEL: Houve consumo de peças. O Nº do Chamado Almoxarifado (Num/Ano) é obrigatório para concluir!' 
+        });
+      }
+    }
+
+    const resultado = await prisma.$transaction(async (tx) => {
+      //  Atualizar a OS Principal
+      const osAtualizada = await tx.solicitacoes.update({
+        where: { id: Number(id) },
+        data: {
+          status: status !== undefined ? status : solicitacaoAtual.status,
+          numero_pedido_externo: numero_pedido_externo !== undefined ? numero_pedido_externo : solicitacaoAtual.numero_pedido_externo,
+          justificativa: justificativa !== undefined ? justificativa : solicitacaoAtual.justificativa,
+        }
+      });
+
+      // Atualizar Status das Peças (Se enviado pelo Frontend)
+      if (itens_entrega && Array.isArray(itens_entrega)) {
+        for (const itemRequest of itens_entrega) {
+          const itemDbAtual = solicitacaoAtual.solicitacao_itens.find(i => i.id === itemRequest.solicitacao_item_id);
+          
+          if (itemDbAtual && itemDbAtual.status_entrega !== itemRequest.status_entrega) {
+            
+            //  Técnico devolveu peça de CONSUMO alegando Defeito/Erro
+            if (itemRequest.status_entrega === 'Devolvida' && itemDbAtual.tipo_uso === 'CONSUMO') {
+                await tx.itens.update({
+                    where: { id: itemDbAtual.item_id },
+                    data: { quantidade_defeito: { increment: itemDbAtual.quantidade_solicitada } }
+                });
+            }
+
+            //  GESTOR aceitou fisicamente o retorno de uma peça de TESTE
+            // A peça volta para a gaveta de testes bons!
+            if (itemRequest.status_entrega === 'Devolução Aceite' && itemDbAtual.tipo_uso === 'TESTE') {
+                await tx.itens.update({
+                    where: { id: itemDbAtual.item_id },
+                    data: { quantidade_teste: { increment: itemDbAtual.quantidade_solicitada } }
+                });
+            }
+            
+            await tx.solicitacao_itens.update({
+              where: { id: itemRequest.solicitacao_item_id },
+              data: { status_entrega: itemRequest.status_entrega }
+            });
+          }
+        }
+      }
+      return osAtualizada;
+    });
+
+    res.status(200).json(resultado);
+
+  } catch (error) {
+    console.error('Erro no updateSolicitacao:', error);
+    res.status(500).json({ message: 'Erro interno.' });
+  }
+};
+
 
 export const getSolicitacaoById = async (req: Request, res: Response) => {
   const { id } = req.params;
@@ -173,6 +258,7 @@ export const getSolicitacaoById = async (req: Request, res: Response) => {
     res.status(500).json({ message: 'Erro interno ao buscar detalhes.' });
   }
 };
+
 
 export const updateStatusSolicitacao = async (req: Request, res: Response) => {
     const { id } = req.params;
@@ -301,7 +387,7 @@ export const updateSolicitacaoItemStatus = async (req: Request, res: Response) =
             return itemAtualizado;
         });
 
-        // 🚀 NOTIFICAÇÃO: Status de um Item específico alterado (Entregue/Devolvido)
+        // NOTIFICAÇÃO: Status de um Item específico alterado (Entregue/Devolvido)
         await dispararNotificacao({
           usuario_id: solicitacao_itens.solicitacoes.usuario_id,
           titulo: '🛠️ Atualização de Peça/Equipamento',
@@ -321,25 +407,27 @@ export const cancelarItemSolicitacao = async (req: Request, res: Response) => {
   const { itemId } = req.params;
 
   try {
-    const solicitacao_itens = await prisma.solicitacao_itens.findUnique({
-      where: { id: Number(itemId) }
+    const item = await prisma.solicitacao_itens.findUnique({ where: { id: Number(itemId) } });
+    if (!item) return res.status(404).json({ message: "Item não encontrado." });
+
+    await prisma.$transaction(async (tx) => {
+        await tx.solicitacao_itens.update({
+            where: { id: Number(itemId) },
+            data: { status_entrega: 'Cancelado' }
+        });
+
+        //  Devolve pro estoque correto de onde saiu
+        await tx.itens.update({
+            where: { id: item.item_id },
+            data: item.tipo_uso === 'TESTE' 
+              ? { quantidade_teste: { increment: item.quantidade_solicitada } }
+              : { quantidade_estoque: { increment: item.quantidade_solicitada } }
+        });
     });
 
-    if (!solicitacao_itens) return res.status(404).json({ message: "Item da solicitação não encontrado." });
-
-    await prisma.solicitacao_itens.update({
-      where: { id: Number(itemId) },
-      data: { status_entrega: 'Cancelado' }
-    });
-
-    await prisma.itens.update({
-      where: { id: solicitacao_itens.item_id },
-      data: { quantidade: { increment: solicitacao_itens.quantidade_solicitada } }
-    });
-
-    return res.status(200).json({ message: "Item cancelado e estoque restaurado." });
+    res.status(200).json({ message: "Item cancelado e estoque restaurado." });
   } catch (error) {
-    return res.status(500).json({ message: "Erro ao cancelar item." });
+    res.status(500).json({ message: "Erro ao cancelar item." });
   }
 };
 
@@ -366,5 +454,77 @@ export const sinalizarDefeitoItem = async (req: Request, res: Response) => {
     return res.status(200).json({ message: "Peça registrada como defeituosa." });
   } catch (error) {
     return res.status(500).json({ message: "Erro ao registrar defeito." });
+  }
+};
+
+
+
+export const converterTesteEmConsumo = async (req: Request, res: Response) => {
+  const { itemId } = req.params;
+
+  try {
+    const itemAtual = await prisma.solicitacao_itens.findUnique({
+      where: { id: Number(itemId) },
+      include: { solicitacoes: true, itens: true }
+    });
+
+    if (!itemAtual) return res.status(404).json({ message: "Item não encontrado." });
+    if (itemAtual.tipo_uso !== 'TESTE') {
+      return res.status(400).json({ message: "Este item não é de teste." });
+    }
+
+    const resultado = await prisma.$transaction(async (tx) => {
+      //  Verifica se há estoque de consumo disponível para a peça definitiva
+      if (itemAtual.itens.quantidade_estoque < itemAtual.quantidade_solicitada) {
+        throw new Error(`Sem estoque de CONSUMO suficiente para a peça: ${itemAtual.itens.descricao}`);
+      }
+
+      //  Muda o status da peça de Teste para devolução
+      await tx.solicitacao_itens.update({
+        where: { id: Number(itemId) },
+        data: { status_entrega: 'Aguardando Devolução' }
+      });
+
+      //  Desconta a peça nova do estoque de Consumo
+      await tx.itens.update({
+        where: { id: itemAtual.item_id },
+        data: { quantidade_estoque: { decrement: itemAtual.quantidade_solicitada } }
+      });
+
+      // Adiciona a nova peça (Consumo) à OS, com status "Pendente" para o Gestor separar
+      const novoItemConsumo = await tx.solicitacao_itens.create({
+        data: {
+          solicitacao_id: itemAtual.solicitacao_id,
+          item_id: itemAtual.item_id,
+          quantidade_solicitada: itemAtual.quantidade_solicitada,
+          tipo_uso: 'CONSUMO',
+          status_entrega: 'Pendente'
+        }
+      });
+
+      // 5. Atualiza o Histórico/Justificativa da OS para não haver dúvidas
+      const novaJustificativa = `${itemAtual.solicitacoes.justificativa || ''}\n[${new Date().toLocaleString('pt-BR')}] Peça de teste "${itemAtual.itens.descricao}" funcionou. Solicitada a peça definitiva de consumo. Aguardando troca.`.trim();
+      
+      await tx.solicitacoes.update({
+        where: { id: itemAtual.solicitacao_id },
+        data: { justificativa: novaJustificativa }
+      });
+
+      return novoItemConsumo;
+    });
+
+    // Opcional: Notificar o gestor para separar a peça definitiva
+    await dispararNotificacao({
+        usuario_id: itemAtual.solicitacoes.responsavel_usuario_id,
+        titulo: '🔄 Peça de Consumo Solicitada',
+        mensagem: `O técnico confirmou o teste da peça ${itemAtual.itens.descricao} na OS ${itemAtual.solicitacoes.numero_glpi}. A peça de teste será devolvida e a definitiva precisa ser separada.`,
+        tipo: 'info',
+        link_acao: '/gerenciar-solicitacoes'
+    });
+
+    return res.status(200).json({ message: "Conversão realizada com sucesso!", data: resultado });
+  } catch (error: any) {
+    console.error(error);
+    return res.status(400).json({ message: error.message || "Erro ao converter item de teste em consumo." });
   }
 };

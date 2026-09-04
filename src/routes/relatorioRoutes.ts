@@ -4,7 +4,8 @@ import {
   getRelatorioSolicitacoes,
   getDadosGraficos,
   getRelatorioEstoque,
-  getHistoricoPatrimonio
+  getHistoricoPatrimonio,
+  getDashboardProducao
 } from '../controllers/relatorioController';
 import { authMiddleware, managerOrAdminMiddleware } from '../middlewares/authMiddleware';
 
@@ -25,5 +26,7 @@ router.get('/estoque', getRelatorioEstoque);
 
 // Rota de auditoria (quem moveu o quê e para onde)
 router.get('/patrimonio/historico', getHistoricoPatrimonio);
+// rota para novo dashboard de produção de serviços
+router.get('/producao-dashboard', getDashboardProducao);
 
 export default router;
