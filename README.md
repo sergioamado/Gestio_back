@@ -8,3 +8,4 @@ Cliente Atualizado:
 npx prisma generate
 Ver esquema criado:
 npx prisma studio
+ npx tsx seed.ts

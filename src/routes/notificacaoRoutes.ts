@@ -1,6 +1,6 @@
 // src/routes/notificacaoRoutes.ts
 import { Router } from 'express';
-import { getNotificacoes, marcarComoLida, marcarTodasComoLidas } from '../controllers/notificacaoController';
+import { getNotificacoes, marcarComoLida, marcarTodasComoLidas, gerarLinkTelegram, atualizarPreferenciasNotificacao } from '../controllers/notificacaoController';
 import { authMiddleware } from '../middlewares/authMiddleware';
 
 const router = Router();
@@ -16,5 +16,11 @@ router.put('/lidas-todas', marcarTodasComoLidas);
 
 // PUT /api/notificacoes/:id/lida - Marca uma notificação específica como lida
 router.put('/:id/lida', marcarComoLida);
+
+router.get('/telegram/gerar-link', authMiddleware, gerarLinkTelegram);
+
+router.put('/preferencias', authMiddleware, atualizarPreferenciasNotificacao);
+
+
 
 export default router;

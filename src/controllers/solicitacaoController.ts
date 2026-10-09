@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { dispararNotificacao } from './notificacaoController';
+import { getIO } from '../socket';
 
 const prisma = new PrismaClient();
 
@@ -143,7 +144,7 @@ export const createSolicitacao = async (req: Request, res: Response) => {
       mensagem: `Sua solicitação GLPI ${validatedData.numero_glpi} foi gerada (Status: PENDENTE).`,
       tipo: 'sucesso', link_acao: '/gerenciar-solicitacoes'
     });
-
+    try { getIO().emit('atualizar_estoque'); } catch(e) {}
     res.status(201).json(novaSolicitacao);
   } catch (error: any) {
     res.status(400).json({ message: error.message || 'Erro ao criar OS.' });
@@ -224,7 +225,7 @@ export const updateSolicitacao = async (req: Request, res: Response) => {
       }
       return osAtualizada;
     });
-
+    try { getIO().emit('atualizar_estoque'); } catch(e) {}
     res.status(200).json(resultado);
 
   } catch (error) {
@@ -260,10 +261,12 @@ export const getSolicitacaoById = async (req: Request, res: Response) => {
 };
 
 
+
+
 export const updateStatusSolicitacao = async (req: Request, res: Response) => {
     const { id } = req.params;
     const { status, nova_justificativa } = req.body;
-    const idUsuarioAcao = req.user!.id; // Quem clicou no botão de atualizar
+    const idUsuarioAcao = req.user!.id; 
 
     if (!status) return res.status(400).json({ message: 'O status é obrigatório.' });
 
@@ -280,13 +283,10 @@ export const updateStatusSolicitacao = async (req: Request, res: Response) => {
             data: { status, justificativa: justificativaAtualizada } as any, 
         });
 
-        // Define a cor/ícone baseado no status
         let iconeTipo = 'info';
         if (status === 'APROVADA') iconeTipo = 'sucesso';
         if (status === 'REJEITADA' || status === 'CANCELADA') iconeTipo = 'alerta';
 
-        //  Avisa o dono da OS (Solicitante original)
-        // Só avisa se não foi ele próprio a fazer a alteração
         if (solicitacao.usuario_id !== idUsuarioAcao) {
           await dispararNotificacao({
             usuario_id: solicitacao.usuario_id,
@@ -297,17 +297,23 @@ export const updateStatusSolicitacao = async (req: Request, res: Response) => {
           });
         }
 
-        // Avisa os Gerentes da Unidade (Para controlo operacional)
-        const gerentes = await prisma.usuarios.findMany({
-          where: { unidade_id: solicitacao.unidade_id, role: 'gerente' }
+        const gestores = await prisma.usuarios.findMany({
+          where: {
+            OR: [
+              { role: 'admin' },
+              { role: 'gerente', unidade_id: solicitacao.unidade_id }
+            ]
+          }
         });
 
-        for (const gerente of gerentes) {
-          // Garante que o gerente não recebe um aviso sobre uma ação que ele mesmo fez agora
-          if (gerente.id !== idUsuarioAcao) {
+        console.log("🕵️‍♂️ GESTORES ENCONTRADOS PARA NOTIFICAR:", gestores.map(g => g.nome_completo));
+
+        // Dispara para todos os gestores/admins encontrados
+        for (const gestor of gestores) {
+          if (gestor.id !== idUsuarioAcao) {
             await dispararNotificacao({
-              usuario_id: gerente.id,
-              titulo: '📊 OS Atualizada (Dashboard)',
+              usuario_id: gestor.id,
+              titulo: '📊 OS Atualizada',
               mensagem: `A OS (GLPI: ${solicitacao.numero_glpi}) foi alterada para *${status}*.`,
               tipo: 'info',
               link_acao: '/gerenciar-solicitacoes'
@@ -315,11 +321,20 @@ export const updateStatusSolicitacao = async (req: Request, res: Response) => {
           }
         }
 
-        res.json(solicitacao);
+        // O GRITO GLOBAL FICA AQUI 
+        try { getIO().emit('atualizar_tabelas_os'); } catch (err) {}
+        try { getIO().emit('atualizar_estoque'); } catch(e) {}
+        
+        return res.json(solicitacao);
+        
+
     } catch (error) {
-        res.status(500).json({ message: 'Erro ao atualizar status.' });
+        console.error(error);
+        return res.status(500).json({ message: 'Erro ao atualizar status.' });
     }
 };
+
+
 
 export const getLatestSolicitacoes = async (req: Request, res: Response) => {
     const { id: userId, role, unidade_id } = req.user!; 
@@ -361,11 +376,20 @@ export const updateSolicitacaoItemStatus = async (req: Request, res: Response) =
     try {
         const solicitacao_itens = await prisma.solicitacao_itens.findUnique({
             where: { id: Number(itemId) },
-            include: { solicitacoes: true, itens: true } // Precisamos puxar a OS e o Item para a notificação
+            include: { solicitacoes: true, itens: true }
         });
 
         if (!solicitacao_itens) {
             return res.status(404).json({ message: 'Item da solicitação não encontrado.' });
+        }
+
+        if (solicitacao_itens.solicitacoes.status === 'CONCLUIDA' || solicitacao_itens.solicitacoes.status === 'CANCELADA') {
+            return res.status(400).json({ message: 'Ação negada. Não é possível alterar peças de um chamado já encerrado.' });
+        }
+
+        // Gerente não pode entregar peça se a OS não estiver aprovada/em andamento
+        if (status_entrega === 'Entregue' && solicitacao_itens.solicitacoes.status === 'PENDENTE') {
+            return res.status(400).json({ message: 'A OS precisa ser APROVADA pelo gerente antes de entregar peças.' });
         }
 
         const resultado = await prisma.$transaction(async (tx) => {
@@ -377,17 +401,36 @@ export const updateSolicitacaoItemStatus = async (req: Request, res: Response) =
                 },
             });
 
+            // Gerente confirma o recebimento de uma peça CANCELADA (Volta pro estoque)
+            if (status_entrega === 'Cancelado' && solicitacao_itens.status_entrega === 'Devolução Pendente (Cancelado)') {
+                await tx.itens.update({
+                    where: { id: solicitacao_itens.item_id },
+                    data: solicitacao_itens.tipo_uso === 'TESTE' 
+                      ? { quantidade_teste: { increment: solicitacao_itens.quantidade_solicitada } }
+                      : { quantidade_estoque: { increment: solicitacao_itens.quantidade_solicitada } }
+                });
+            }
+
+            // Gerente confirma o recebimento de uma peça com DEFEITO (Vai pro lixo/garantia)
+            if (status_entrega === 'Defeito' && solicitacao_itens.status_entrega === 'Devolução Pendente (Defeito)') {
+                await tx.itens.update({
+                    where: { id: solicitacao_itens.item_id },
+                    data: { quantidade_defeito: { increment: solicitacao_itens.quantidade_solicitada } }
+                });
+            }
+
+            // Lógica antiga (caso seja uma devolução simples de teste que funcionou)
             if (status_entrega === 'Devolvido' && solicitacao_itens.status_entrega !== 'Devolvido') {
                 await tx.itens.update({
                     where: { id: solicitacao_itens.item_id },
-                    data: { quantidade: { increment: solicitacao_itens.quantidade_solicitada } }
+                    data: { quantidade_estoque: { increment: solicitacao_itens.quantidade_solicitada } }
                 });
             }
 
             return itemAtualizado;
         });
 
-        // NOTIFICAÇÃO: Status de um Item específico alterado (Entregue/Devolvido)
+        // NOTIFICAÇÃO
         await dispararNotificacao({
           usuario_id: solicitacao_itens.solicitacoes.usuario_id,
           titulo: '🛠️ Atualização de Peça/Equipamento',
@@ -395,37 +438,37 @@ export const updateSolicitacaoItemStatus = async (req: Request, res: Response) =
           tipo: status_entrega === 'Entregue' ? 'sucesso' : 'info',
           link_acao: '/gerenciar-solicitacoes'
         });
-
+        
+        try { getIO().emit('atualizar_estoque'); } catch(e) {}
         res.json(resultado);
     } catch (error) {
-        console.error("Erro em updateSolicitacaoItemStatus:", error);
         res.status(500).json({ message: 'Erro ao atualizar status do item.' });
     }
 };
+
 
 export const cancelarItemSolicitacao = async (req: Request, res: Response) => {
   const { itemId } = req.params;
 
   try {
-    const item = await prisma.solicitacao_itens.findUnique({ where: { id: Number(itemId) } });
+    const item = await prisma.solicitacao_itens.findUnique({ 
+        where: { id: Number(itemId) }, include: { solicitacoes: true }
+    });
+    
     if (!item) return res.status(404).json({ message: "Item não encontrado." });
 
-    await prisma.$transaction(async (tx) => {
-        await tx.solicitacao_itens.update({
-            where: { id: Number(itemId) },
-            data: { status_entrega: 'Cancelado' }
-        });
+    if (item.solicitacoes.status === 'CONCLUIDA' || item.solicitacoes.status === 'CANCELADA') {
+        return res.status(400).json({ message: 'Ação negada. A OS já está encerrada.' });
+    }
 
-        //  Devolve pro estoque correto de onde saiu
-        await tx.itens.update({
-            where: { id: item.item_id },
-            data: item.tipo_uso === 'TESTE' 
-              ? { quantidade_teste: { increment: item.quantidade_solicitada } }
-              : { quantidade_estoque: { increment: item.quantidade_solicitada } }
-        });
+    // 🚀 O Técnico apenas avisa que quer cancelar. O estoque NÃO é alterado aqui!
+    await prisma.solicitacao_itens.update({
+        where: { id: Number(itemId) },
+        data: { status_entrega: 'Devolução Pendente (Cancelado)' }
     });
 
-    res.status(200).json({ message: "Item cancelado e estoque restaurado." });
+    try { getIO().emit('atualizar_tabelas_os'); } catch(e) {}
+    res.status(200).json({ message: "Intenção de cancelamento registrada. Entregue a peça ao gestor para baixa no SIPAC." });
   } catch (error) {
     res.status(500).json({ message: "Erro ao cancelar item." });
   }
@@ -436,27 +479,27 @@ export const sinalizarDefeitoItem = async (req: Request, res: Response) => {
 
   try {
     const solicitacao_itens = await prisma.solicitacao_itens.findUnique({
-      where: { id: Number(itemId) }
+      where: { id: Number(itemId) }, include: { solicitacoes: true }
     });
 
     if (!solicitacao_itens) return res.status(404).json({ message: "Item não encontrado." });
 
+    if (solicitacao_itens.solicitacoes.status === 'CONCLUIDA' || solicitacao_itens.solicitacoes.status === 'CANCELADA') {
+        return res.status(400).json({ message: 'Ação negada. A OS já está encerrada.' });
+    }
+    
+    // O Técnico apenas avisa que há defeito. O estoque NÃO é alterado aqui!
     await prisma.solicitacao_itens.update({
       where: { id: Number(itemId) },
-      data: { status_entrega: 'Defeito' }
+      data: { status_entrega: 'Devolução Pendente (Defeito)' }
     });
 
-    await prisma.itens.update({
-      where: { id: solicitacao_itens.item_id },
-      data: { quantidade: { increment: solicitacao_itens.quantidade_solicitada } }
-    });
-
-    return res.status(200).json({ message: "Peça registrada como defeituosa." });
+    try { getIO().emit('atualizar_tabelas_os'); } catch(e) {}
+    return res.status(200).json({ message: "Defeito sinalizado. Entregue a peça ao gestor para trâmite do SIPAC." });
   } catch (error) {
     return res.status(500).json({ message: "Erro ao registrar defeito." });
   }
 };
-
 
 
 export const converterTesteEmConsumo = async (req: Request, res: Response) => {
@@ -521,7 +564,7 @@ export const converterTesteEmConsumo = async (req: Request, res: Response) => {
         tipo: 'info',
         link_acao: '/gerenciar-solicitacoes'
     });
-
+    try { getIO().emit('atualizar_estoque'); } catch(e) {}
     return res.status(200).json({ message: "Conversão realizada com sucesso!", data: resultado });
   } catch (error: any) {
     console.error(error);

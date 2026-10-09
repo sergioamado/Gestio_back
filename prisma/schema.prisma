@@ -78,7 +78,7 @@ model solicitacoes {
   numero_pedido_externo  String?   @db.VarChar(100)   // Nº do Chamado Almoxarifado
   documento_emitido_em   DateTime? @db.Timestamptz(6)
   unidade_id             Int
-  producao_servico ProducaoServico?
+  producao_servico ProducaoServico[]
   solicitacao_itens                                      solicitacao_itens[]
   usuarios_solicitacoes_responsavel_usuario_idTousuarios usuarios                 @relation("solicitacoes_responsavel_usuario_idTousuarios", fields: [responsavel_usuario_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   unidades_organizacionais                               unidades_organizacionais @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -152,7 +152,7 @@ model manutencao_eletronica {
   status                 StatusManutencao @default(Pendente)
   laudo_tecnico          String?
   patrimonio             String?   @db.VarChar(50)
-  producao_servico ProducaoServico?
+  producao_servico ProducaoServico[]
   usuarios   usuarios  @relation("tecnico_responsavel", fields: [tecnico_responsavel_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   aberto_por usuarios? @relation("manutencao_aberto_por", fields: [aberto_por_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
@@ -200,7 +200,7 @@ model AtendimentoImpressora {
   impressora_id                Int
   tecnico_id                   Int
   data_visita                  DateTime?         @db.Date
-  producao_servico ProducaoServico?
+  producao_servico ProducaoServico[]
   impressora                Impressora               @relation(fields: [impressora_id], references: [id])
   tecnico                   usuarios                 @relation(fields: [tecnico_id], references: [id])
   unidades_organizacionais  unidades_organizacionais @relation(fields: [unidade_id], references: [id])
@@ -353,6 +353,7 @@ model HistoricoSuprimento {
   quantidade_adicionada Int? // Usado quando é 'ENTRADA'
   quantidade_anterior   Int? // Usado quando é 'CORRECAO'
   quantidade_nova       Int? // Usado quando é 'CORRECAO'
+  unidade_imagem_solicitadas Int?
   justificativa         String? // Usado quando é 'CORRECAO'
   data                  DateTime @default(now())
 
@@ -404,9 +405,9 @@ model ProducaoServico {
   
   // 🔗 VÍNCULOS COM OS CHAMADOS (Pode ser de 3 tipos diferentes)
   // Deixamos opcionais porque o serviço pode ser de uma OS, de uma Impressora ou de Eletrónica
-  solicitacao_peca_id     Int?      @unique // Vincula à OS de peças/equipamentos
-  atendimento_impr_id     Int?      @unique // Vincula ao Atendimento de Impressora
-  manutencao_eletr_id     Int?      @unique // Vincula à OS de Eletrónica 
+  solicitacao_peca_id     Int?      // Vincula à OS de peças/equipamentos
+  atendimento_impr_id     Int?      // Vincula ao Atendimento de Impressora
+  manutencao_eletr_id     Int?      // Vincula à OS de Eletrónica 
   numero_glpi             String?
 
   // RELAÇÕES INVERSAS (Você terá de adicionar ProducaoServico? no modelo destas 3 tabelas acima)

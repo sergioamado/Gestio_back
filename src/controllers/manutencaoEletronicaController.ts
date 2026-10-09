@@ -3,12 +3,13 @@ import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import { dispararNotificacao } from './notificacaoController';
+import { getIO } from '../socket';
 
 const prisma = new PrismaClient();
 
 const manutencaoSchema = z.object({
   glpi: z.string().optional(),
-  tecnico_responsavel_id: z.number().int().optional(), // Tornado opcional, pois o criador pode não saber quem vai assumir
+  tecnico_responsavel_id: z.number().int().optional(), 
   equipamento: z.string().min(1, "O nome do equipamento é obrigatório."),
    patrimonio: z.string().min(1, "O patrimônio é obrigatório."),
   descricao_problema: z.string().min(1, "A descrição do problema é obrigatória."),
@@ -19,7 +20,7 @@ export const createManutencao = async (req: Request, res: Response) => {
     const data = manutencaoSchema.parse(req.body);
     const usuarioLogadoId = req.user!.id; // Pega o ID de quem está criando o chamado
     
-    // 🚀 Eletrônica #7: Grava quem abriu o chamado
+    //  Grava quem abriu o chamado
     const payloadParaBanco: any = {
       ...data,
       aberto_por_id: usuarioLogadoId
@@ -33,6 +34,7 @@ export const createManutencao = async (req: Request, res: Response) => {
     const novaManutencao = await prisma.manutencao_eletronica.create({ 
       data: payloadParaBanco 
     });
+    
 
     if (novaManutencao.tecnico_responsavel_id !== usuarioLogadoId) {
       await dispararNotificacao({
@@ -44,11 +46,15 @@ export const createManutencao = async (req: Request, res: Response) => {
       });
     }
 
-    res.status(201).json(novaManutencao);
+    try { getIO().emit('atualizar_manutencao'); } catch(e) { console.error(e); }
+    
+    return res.status(201).json(novaManutencao);
+
   } catch (error) {
     console.error("Erro ao criar manutenção:", error); 
     res.status(400).json({ message: 'Dados inválidos.', details: error });
   }
+  
 };
 
 export const getAllManutencoes = async (req: Request, res: Response) => {
@@ -59,7 +65,7 @@ export const getAllManutencoes = async (req: Request, res: Response) => {
         usuarios: {
           select: { nome_completo: true },
         },
-        // 🚀 Eletrônica #7: Retorna os dados de quem abriu o chamado para a UI
+        //  Eletrônica #7: Retorna os dados de quem abriu o chamado para a UI
         aberto_por: {
           select: { nome_completo: true }
         }
@@ -108,8 +114,10 @@ export const updateStatusManutencao = async (req: Request, res: Response) => {
           link_acao: '/fila-manutencao-eletronica'
         });
     }
+    try { getIO().emit('atualizar_manutencao'); } catch(e) { console.error(e); }
+    
+    return res.status(201).json(manutencao);
 
-    res.json(manutencao);
   } catch (error) {
     console.error("Erro ao atualizar status de manutenção:", error); 
     res.status(500).json({ message: 'Erro ao atualizar o status.' });
@@ -141,8 +149,10 @@ export const iniciarManutencao = async (req: Request, res: Response) => {
           link_acao: '/fila-manutencao-eletronica'
         });
     }
+    try { getIO().emit('atualizar_manutencao'); } catch(e) { console.error(e); }
+    
+    return res.status(201).json(manutencao);
 
-    res.json(manutencao);
   } catch (error) {
     res.status(500).json({ message: 'Erro ao iniciar manutenção.' });
   }
@@ -190,8 +200,10 @@ export const finalizarManutencao = async (req: Request, res: Response) => {
           link_acao: '/fila-manutencao-eletronica'
         });
     }
+    try { getIO().emit('atualizar_manutencao'); } catch(e) { console.error(e); }
+    
+    return res.status(201).json(manutencao);
 
-    res.json(manutencao);
   } catch (error) {
     res.status(500).json({ message: 'Erro ao finalizar manutenção.' });
   }
@@ -240,8 +252,10 @@ export const editarManutencao = async (req: Request, res: Response) => {
         link_acao: '/fila-manutencao-eletronica'
       });
     }
+    try { getIO().emit('atualizar_manutencao'); } catch(e) { console.error(e); }
+    
+    return res.status(201).json(manutencao);
 
-    res.json(manutencao);
   } catch (error) {
     console.error("Erro ao editar manutenção:", error);
     res.status(500).json({ message: 'Erro ao editar manutenção.' });

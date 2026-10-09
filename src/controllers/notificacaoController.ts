@@ -3,10 +3,13 @@ import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import TelegramBot from 'node-telegram-bot-api';
 import dotenv from 'dotenv';
+import { getIO } from '../socket';
+import crypto from 'crypto';
 
 //  CARREGAMENTO DE VARIÁVEIS DE AMBIENTE E BANCO DE DADOS
 dotenv.config();
 const prisma = new PrismaClient();
+
 
 // INICIALIZAÇÃO DO BOT DO TELEGRAM
 // Pegamos a chave (token) do Telegram que está no ficheiro .env
@@ -68,7 +71,7 @@ if (bot) {
           // Envia a mensagem de boas-vindas diretamente para o celular do usuário
           bot.sendMessage(
             chatId, 
-            `✅ *Bem-vindo(a), ${usuario.nome_completo}!* \n\nO seu Telegram foi vinculado com sucesso ao *Gestio*. A partir de agora, os alertas de Ordens de Serviço e Estoque chegarão aqui. 🚀`, 
+            `✅ *Bem-vindo(a), ${usuario.nome_completo}!* \n\nO seu Telegram foi vinculado com sucesso ao *COSUP+*. A partir de agora, os alertas de Ordens de Serviço e Estoque chegarão aqui. `, 
             { parse_mode: 'Markdown' } // Permite usar *negrito*
           );
         } else {
@@ -86,7 +89,8 @@ if (bot) {
 
 // MOTOR CENTRAL DE DISPARO DE NOTIFICAÇÕES (Usado por todo o Backend)
 
-// Qualquer controller (ex: solicitacaoController) chama esta função para avisar alguém.
+
+
 export const dispararNotificacao = async (dados: {
   usuario_id: number;
   titulo: string;
@@ -95,49 +99,47 @@ export const dispararNotificacao = async (dados: {
   link_acao?: string;
 }) => {
   try {
-    // Descobrimos as preferências do usuário que vai receber o aviso
     const usuario = await prisma.usuarios.findUnique({
       where: { id: dados.usuario_id },
       select: { telegram_chat_id: true, notificacoes_app: true, notificacoes_bot: true }
     });
+    
+    if (!usuario) return;
 
-    if (!usuario) return; // Se o usuário não existir, não faz nada.
-
-    // SININHO DO SISTEMA (NOTIFICAÇÃO INTERNA)
-    // Se ele ativou alertas dentro do sistema (o sininho no canto superior da tela)
+    // SININHO DO SISTEMA
     if (usuario.notificacoes_app) {
-      await prisma.notificacoes.create({
+      //  Agora sim, guardamos a notificação criada numa variável
+      const novaNotificacao = await prisma.notificacoes.create({
         data: {
           usuario_id: dados.usuario_id,
           titulo: dados.titulo,
           mensagem: dados.mensagem,
           tipo: dados.tipo.toUpperCase(), 
           link_acao: dados.link_acao,
-          lida: false // Nasce como "Não Lida" para acender a bolinha vermelha
+          lida: false 
         }
       });
+
+      //  O GRITO NO RÁDIO: Usamos 'dados.usuario_id' para achar a sala certa
+      try {
+        getIO().to(`user_${dados.usuario_id}`).emit('nova_notificacao', novaNotificacao);
+      } catch (err) {
+        console.error("Aviso: Rádio desligado ou erro ao emitir.", err);
+      }
     }
 
-    //  MENSAGEM NO TELEGRAM (PUSH EXTERNO)
-    // Se o bot estiver ativo, o usuário tiver um chat vinculado e aceitar receber alertas no celular
+    // MENSAGEM NO TELEGRAM
     if (bot && usuario.telegram_chat_id && usuario.notificacoes_bot) {
-      
-      // Escolhe um emoji bonito baseado no tipo da notificação (info, alerta, sucesso, erro)
       const icones: Record<string, string> = { 'info': 'ℹ️', 'alerta': '⚠️', 'sucesso': '✅', 'erro': '❌' };
       const icone = icones[dados.tipo.toLowerCase()] || '🔔';
-
-      // Monta o texto. Se houver link, cria um botão clicável com o FRONTEND_URL.
       const texto = `${icone} *${dados.titulo}*\n\n${dados.mensagem}${dados.link_acao ? `\n\n🔗 [Acessar no Sistema](${FRONTEND_URL}${dados.link_acao})` : ''}`;
       
-      // Dispara a mensagem para o telemóvel do usuário!
       await bot.sendMessage(usuario.telegram_chat_id, texto, { parse_mode: 'Markdown' });
     }
   } catch (error) {
-    // Se falhar o envio (ex: usuário bloqueou o bot), apenas regista no console do servidor
     console.error(`Falha ao notificar user ${dados.usuario_id}:`, error);
   }
 };
-
 
 // 📡 ENDPOINTS HTTP (O que o Frontend chama via axios/api)
 
@@ -181,5 +183,71 @@ export const marcarTodasComoLidas = async (req: Request, res: Response) => {
     res.json({ message: 'Todas as notificações marcadas como lidas.' });
   } catch (error) {
     res.status(500).json({ message: 'Erro ao marcar todas como lidas' });
+  }
+};
+
+
+//  Gera o Link do Telegram (Deep Linking)
+export const gerarLinkTelegram = async (req: Request, res: Response) => {
+  const usuarioId = req.user?.id; 
+
+  try {
+    const tokenSecreto = crypto.randomBytes(8).toString('hex');
+
+    await prisma.usuarios.update({
+      where: { id: usuarioId },
+      data: { telegram_token: tokenSecreto }
+    });
+
+    const botUsername = process.env.TELEGRAM_BOT_USERNAME;
+
+    if (!botUsername) {
+      return res.status(500).json({ message: 'A variável TELEGRAM_BOT_USERNAME não está configurada no servidor (.env).' });
+    }
+
+    const link = `https://t.me/${botUsername}?start=${tokenSecreto}`;
+
+    res.json({ link });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao gerar link de vinculação do Telegram.' });
+  }
+};
+
+//  Atualiza as preferências (Sininho e Telegram)
+export const atualizarPreferenciasNotificacao = async (req: Request, res: Response) => {
+  const usuarioId = req.user?.id;
+  //  AGORA EXTRAIMOS O TELEGRAM_CHAT_ID TAMBÉM
+  const { notificacoes_app, notificacoes_bot, desvincular_telegram, telegram_chat_id } = req.body;
+
+  try {
+    const dataAtualizacao: any = {
+      notificacoes_app,
+      notificacoes_bot
+    };
+
+    //Se o Modal mandou um ID novo, nós preparamos para salvar
+    if (telegram_chat_id) {
+      dataAtualizacao.telegram_chat_id = telegram_chat_id;
+    }
+
+    if (desvincular_telegram) {
+      dataAtualizacao.telegram_chat_id = null;
+      dataAtualizacao.telegram_token = null;
+      dataAtualizacao.notificacoes_bot = false;
+    }
+
+    const usuarioAtualizado = await prisma.usuarios.update({
+      where: { id: usuarioId },
+      data: dataAtualizacao,
+      select: { notificacoes_app: true, notificacoes_bot: true, telegram_chat_id: true }
+    });
+
+    res.json({ 
+      message: 'Preferências atualizadas com sucesso!', 
+      vinculado: !!usuarioAtualizado.telegram_chat_id,
+      preferencias: usuarioAtualizado
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao atualizar preferências.' });
   }
 };

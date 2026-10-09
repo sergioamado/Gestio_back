@@ -14,12 +14,18 @@ import estatisticasRoutes from './routes/estatisticasRoutes';
 import patrimonioRoutes from './routes/patrimonioRoutes'; 
 import servicosRoutes from './routes/servicosRoutes';
 import analiseRoutes from './routes/analiseRoutes';
+import { initSocket } from './socket';
+import http from 'http';
 
 import path from 'path';
 import fs from 'fs';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+const server = http.createServer(app);
+
+initSocket(server);
 
 // Middlewares
 app.use(cors()); 
@@ -48,6 +54,6 @@ if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-app.listen(Number (PORT), '0.0.0.0', () => {
-  console.log(`🚀 Servidor rodando na porta ${PORT}`);
+server.listen(PORT, () => {
+  console.log(`🚀 Servidor Express e WebSockets rodando na porta ${PORT}`);
 });

@@ -89,12 +89,28 @@ const updateUserSchema = z.object({
 
 export const updateUser = async (req: Request, res: Response) => {
   const { id } = req.params;
+  
+  // Pegamos quem está a fazer a requisição (graças ao seu authMiddleware)
+  const usuarioLogado = req.user!; 
+
+  if (usuarioLogado.role !== 'admin' && usuarioLogado.id !== Number(id)) {
+    return res.status(403).json({ message: 'Acesso negado. Você só pode alterar as suas próprias configurações.' });
+  }
+
   try {
     const data = updateUserSchema.parse(req.body);
+
+    if (usuarioLogado.role !== 'admin') {
+      delete (data as any).role;
+      delete (data as any).unidade_id;
+      delete (data as any).status; 
+    }
+
     const user = await prisma.usuarios.update({
       where: { id: Number(id) },
       data,
     });
+    
     const { hashed_password, ...userResponse } = user;
     res.json(userResponse);
   } catch (error) {
@@ -145,65 +161,5 @@ export const resetPasswordByAdmin = async (req: Request, res: Response) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Erro interno no servidor ao tentar alterar a senha.' });
-  }
-};
-
-// 🚀 Gera o Link do Telegram (Deep Linking)
-export const gerarLinkTelegram = async (req: Request, res: Response) => {
-  const usuarioId = req.user?.id; 
-
-  try {
-    const tokenSecreto = crypto.randomBytes(8).toString('hex');
-
-    await prisma.usuarios.update({
-      where: { id: usuarioId },
-      data: { telegram_token: tokenSecreto }
-    });
-
-    const botUsername = process.env.TELEGRAM_BOT_USERNAME;
-
-    if (!botUsername) {
-      return res.status(500).json({ message: 'A variável TELEGRAM_BOT_USERNAME não está configurada no servidor (.env).' });
-    }
-
-    const link = `https://t.me/${botUsername}?start=${tokenSecreto}`;
-
-    res.json({ link });
-  } catch (error) {
-    res.status(500).json({ message: 'Erro ao gerar link de vinculação do Telegram.' });
-  }
-};
-
-// 🚀 Atualiza as preferências (Sininho e Telegram)
-export const atualizarPreferenciasNotificacao = async (req: Request, res: Response) => {
-  const usuarioId = req.user?.id;
-  // Note que aqui as chaves batem exatamente com o que o Frontend envia
-  const { notificacoes_app, notificacoes_bot, desvincular_telegram } = req.body;
-
-  try {
-    const dataAtualizacao: any = {
-      notificacoes_app,
-      notificacoes_bot
-    };
-
-    if (desvincular_telegram) {
-      dataAtualizacao.telegram_chat_id = null;
-      dataAtualizacao.telegram_token = null;
-      dataAtualizacao.notificacoes_bot = false;
-    }
-
-    const usuarioAtualizado = await prisma.usuarios.update({
-      where: { id: usuarioId },
-      data: dataAtualizacao,
-      select: { notificacoes_app: true, notificacoes_bot: true, telegram_chat_id: true }
-    });
-
-    res.json({ 
-      message: 'Preferências atualizadas com sucesso!', 
-      vinculado: !!usuarioAtualizado.telegram_chat_id,
-      preferencias: usuarioAtualizado
-    });
-  } catch (error) {
-    res.status(500).json({ message: 'Erro ao atualizar preferências.' });
   }
 };
