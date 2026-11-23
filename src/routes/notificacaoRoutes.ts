@@ -1,6 +1,6 @@
 // src/routes/notificacaoRoutes.ts
 import { Router } from 'express';
-import { getNotificacoes, marcarComoLida, marcarTodasComoLidas, gerarLinkTelegram, atualizarPreferenciasNotificacao } from '../controllers/notificacaoController';
+import { getNotificacoes, marcarComoLida, marcarTodasComoLidas, gerarLinkTelegram, atualizarPreferenciasNotificacao, statusTelegram } from '../controllers/notificacaoController';
 import { authMiddleware } from '../middlewares/authMiddleware';
 
 const router = Router();
@@ -18,6 +18,7 @@ router.put('/lidas-todas', marcarTodasComoLidas);
 router.put('/:id/lida', marcarComoLida);
 
 router.get('/telegram/gerar-link', authMiddleware, gerarLinkTelegram);
+router.get('/telegram/status', statusTelegram);
 
 router.put('/preferencias', authMiddleware, atualizarPreferenciasNotificacao);
 

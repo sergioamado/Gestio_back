@@ -7,7 +7,7 @@ const router = Router();
 
 
 
-// Todas as rotas de serviços requerem que o utilizador esteja logado
+// Todas as rotas de serviços requerem que o usuário esteja logado
 router.use(authMiddleware);
 
 // --- ROTAS DO CATÁLOGO DE SERVIÇOS ---

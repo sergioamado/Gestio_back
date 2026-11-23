@@ -23,7 +23,7 @@ const producaoSchema = z.object({
 });
 
 
-// REGISTO DE PRODUÇÃO
+// REGISTRO DE PRODUÇÃO
 export const registrarProducao = async (req: Request, res: Response) => {
   try {
     const validData = producaoSchema.parse(req.body);
@@ -117,16 +117,16 @@ export const registrarProducao = async (req: Request, res: Response) => {
         }
     }
 
-    res.status(201).json({ message: "Produção registada com sucesso!", criados: servicosGravados });
+    res.status(201).json({ message: "Produção registrada com sucesso!", criados: servicosGravados });
 
   } catch (error: any) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: "Dados inválidos", detalhes: error.issues });
     }
     
-    console.error("Erro ao registar produção:", error);
+    console.error("Erro ao registrar produção:", error);
     res.status(500).json({ 
-      message: "Erro interno ao registar os serviços.", 
+      message: "Erro interno ao registrar os serviços.", 
       erroBackend: error.message 
     });
   }
@@ -162,12 +162,12 @@ export const deleteProducao = async (req: Request, res: Response) => {
     if (!producao) return res.status(404).json({ message: 'Produção não encontrada.' });
 
     if (req.user?.role !== 'admin' && req.user?.role !== 'gerente' && req.user?.id !== producao.tecnico_id) {
-      return res.status(403).json({ message: 'Sem permissão para excluir este registo.' });
+      return res.status(403).json({ message: 'Sem permissão para excluir este registro.' });
     }
 
     await prisma.producaoServico.delete({ where: { id: Number(id) } });
     res.status(204).send();
   } catch (error) {
-    res.status(500).json({ message: 'Erro ao excluir registo de produção.' });
+    res.status(500).json({ message: 'Erro ao excluir registro de produção.' });
   }
 };

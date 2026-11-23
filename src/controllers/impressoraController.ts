@@ -195,7 +195,7 @@ export const createControleSuprimentos = async (req: Request, res: Response) => 
         try { getIO().emit('suplemento_criado'); } catch(e) { console.error(e); }
         return res.status(201).json(resultado);
     } catch (error: any) {
-        res.status(400).json({ message: error.message || 'Erro ao registar a requisição.' });
+        res.status(400).json({ message: error.message || 'Erro ao registrar a requisição.' });
     }
 };
 

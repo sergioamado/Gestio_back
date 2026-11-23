@@ -72,8 +72,9 @@ export const login = async (req: Request, res: Response) => {
       { expiresIn: '8h' }
     );
 
-    // CORRIGIDO: Retornar o objeto de utilizador completo, excluindo apenas a senha
-    const { hashed_password, ...userResponse } = user;
+    // CORRIGIDO: Retornar o objeto de usuário completo, excluindo apenas a senha
+    // Nunca devolve ao navegador a senha nem o código temporário de vinculação do Telegram.
+    const { hashed_password, telegram_token, ...userResponse } = user;
 
     res.json({
       message: 'Login bem-sucedido!',

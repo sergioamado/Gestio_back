@@ -69,13 +69,13 @@ export const createUser = async (req: Request, res: Response) => {
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       if (error.code === 'P2002') {
-        return res.status(409).json({ message: `O nome de utilizador ou email fornecido já está em uso.` });
+        return res.status(409).json({ message: `O nome de usuário ou email fornecido já está em uso.` });
       }
     }
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: 'Dados inválidos.', details: error.issues });
     }
-    res.status(500).json({ message: 'Ocorreu um erro interno ao criar o utilizador.' });
+    res.status(500).json({ message: 'Ocorreu um erro interno ao criar o usuário.' });
   }
 };
 

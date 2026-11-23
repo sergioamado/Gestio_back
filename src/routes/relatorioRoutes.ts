@@ -7,6 +7,14 @@ import {
   getHistoricoPatrimonio,
   getDashboardProducao
 } from '../controllers/relatorioController';
+import {
+  listarFontes,
+  gerarRelatorio,
+  listarModelos,
+  criarModelo,
+  atualizarModelo,
+  excluirModelo,
+} from '../controllers/relatorioPersonalizadoController';
 import { authMiddleware, managerOrAdminMiddleware } from '../middlewares/authMiddleware';
 
 const router = Router();
@@ -28,5 +36,13 @@ router.get('/estoque', getRelatorioEstoque);
 router.get('/patrimonio/historico', getHistoricoPatrimonio);
 // rota para novo dashboard de produção de serviços
 router.get('/producao-dashboard', getDashboardProducao);
+
+// Construtor de relatórios personalizados (detalhado/cruzado) e modelos salvos
+router.get('/personalizado/fontes', listarFontes);
+router.post('/personalizado/gerar', gerarRelatorio);
+router.get('/personalizado/modelos', listarModelos);
+router.post('/personalizado/modelos', criarModelo);
+router.put('/personalizado/modelos/:id', atualizarModelo);
+router.delete('/personalizado/modelos/:id', excluirModelo);
 
 export default router;

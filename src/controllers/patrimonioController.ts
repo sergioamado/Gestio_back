@@ -42,7 +42,7 @@ export const createBem = async (req: Request, res: Response) => {
     }
 
     const novoBem = await prisma.bemPatrimonial.create({ data });
-    res.status(201).json({ message: 'Bem registado com sucesso!', data: novoBem });
+    res.status(201).json({ message: 'Bem registrado com sucesso!', data: novoBem });
   } catch (error) {
     res.status(400).json({ message: 'Dados inválidos.', details: error });
   }
@@ -91,7 +91,7 @@ const decodificarTexto = (buf: Buffer): string => {
 // Importação Massiva via PDF (SIPAC)
 export const importarDadosSipac = async (req: Request, res: Response) => {
   if (!req.file) {
-    return res.status(400).json({ message: 'O servidor recusou o ficheiro. Verifique se é um PDF ou CSV válido.' });
+    return res.status(400).json({ message: 'O servidor recusou o arquivo. Verifique se é um PDF ou CSV válido.' });
   }
 
   const unidadeIdImportacao = req.body.unidade_id ? Number(req.body.unidade_id) : null; 
@@ -310,7 +310,7 @@ export const uploadFoto = async (req: Request, res: Response) => {
     await prisma.bemPatrimonial.update({ where: { id: Number(id) }, data: { foto_url: caminhoRelativo } });
     res.json({ message: 'Foto atualizada!', url: caminhoRelativo });
   } catch (error) {
-    res.status(500).json({ message: 'Erro ao guardar caminho da foto.' });
+    res.status(500).json({ message: 'Erro ao salvar caminho da foto.' });
   }
 };
 

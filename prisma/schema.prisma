@@ -142,6 +142,7 @@ model usuarios {
   unidades_organizacionais                                   unidades_organizacionais? @relation(fields: [unidade_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   historicoSuprimentos                                       HistoricoSuprimento[]
   reporteErroEstoques                                        ReporteErroEstoque[]
+  relatorio_modelos                                          RelatorioModelo[]
 }
 
 model manutencao_eletronica {
@@ -470,4 +471,22 @@ model DashboardWidget {
   altura       Int       @default(4)
 
   dashboard    Dashboard @relation(fields: [dashboard_id], references: [id], onDelete: Cascade)
+}
+
+
+// MÓDULO: RELATÓRIOS PERSONALIZADOS (modelos salvos pelo gestor)
+model RelatorioModelo {
+  id            Int      @id @default(autoincrement())
+  nome          String   @db.VarChar(150)
+  descricao     String?  @db.VarChar(500)
+  configuracao  Json     // fonte, tipo (detalhado/cruzado), filtros, colunas, linhas, valores...
+  compartilhado Boolean  @default(false) // visível para os outros gestores
+  usuario_id    Int
+  criado_em     DateTime @default(now()) @db.Timestamptz(6)
+  atualizado_em DateTime @updatedAt @db.Timestamptz(6)
+
+  usuario usuarios @relation(fields: [usuario_id], references: [id], onDelete: Cascade)
+
+  @@index([usuario_id])
+  @@map("relatorio_modelos")
 }

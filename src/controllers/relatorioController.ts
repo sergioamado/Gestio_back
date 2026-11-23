@@ -141,6 +141,12 @@ export const getDashboardProducao = async (req: Request, res: Response) => {
       };
     }
 
+    // Gerente vê só a produção dos técnicos da própria unidade; admin vê tudo.
+    if (req.user?.role !== 'admin') {
+      if (!req.user?.unidade_id) return res.status(403).json({ message: 'Seu usuário não está vinculado a uma unidade.' });
+      onde.tecnico = { unidade_id: req.user.unidade_id };
+    }
+
     const producoes = await prisma.producaoServico.findMany({
       where: onde,
       include: {
