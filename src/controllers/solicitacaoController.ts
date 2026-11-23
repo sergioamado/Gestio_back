@@ -208,15 +208,21 @@ const verificarPermissaoNaOS = (
   return ator;
 };
 
+const textoCurtoOpcional = z.string().trim().max(100).nullable().optional();
+
 const itemEntregaSchema = z.object({
   solicitacao_item_id: z.number().int(),
-  status_entrega: z.string(),
+  status_entrega: z.string().optional(),
   motivo: z.string().trim().max(500).optional(),
+  // Dados do SIPAC por peça (só o gerente edita)
+  numero_pedido_sipac: textoCurtoOpcional,
+  almoxarifado: textoCurtoOpcional,
 });
+
+const vazioParaNull = (v: string | null | undefined) => (v === undefined ? undefined : v && v.trim() ? v.trim() : null);
 
 const updateSolicitacaoSchema = z.object({
   status: z.string().optional(),
-  numero_pedido_externo: z.string().nullable().optional(),
   justificativa: z.string().nullable().optional(),
   itens_entrega: z.array(itemEntregaSchema).optional(),
 });
@@ -241,8 +247,11 @@ export const updateSolicitacao = async (req: Request, res: Response) => {
     }
 
     // Técnico não edita dados administrativos da OS.
-    if (ator === 'tecnico' && (body.numero_pedido_externo !== undefined || body.justificativa !== undefined)) {
-      throw new RegraNegocioError(403, 'Somente o gerente pode alterar o chamado do almoxarifado e o histórico da OS.');
+    const enviouDadosSipac = (body.itens_entrega ?? []).some(
+      (p) => p.numero_pedido_sipac !== undefined || p.almoxarifado !== undefined,
+    );
+    if (ator === 'tecnico' && (enviouDadosSipac || body.justificativa !== undefined)) {
+      throw new RegraNegocioError(403, 'Somente o gerente pode alterar o pedido SIPAC, o almoxarifado e o histórico da OS.');
     }
 
     // ---- Status da OS ----
@@ -254,21 +263,6 @@ export const updateSolicitacao = async (req: Request, res: Response) => {
       );
     }
 
-    // Regra: houve consumo de peças → nº do chamado do almoxarifado é obrigatório para concluir.
-    if (mudouStatus && body.status === OS.CONCLUIDA) {
-      const consumiuPecas = solicitacaoAtual.solicitacao_itens.some(
-        (item) => item.tipo_uso === 'CONSUMO' && item.status_entrega !== 'Cancelado',
-      );
-      const numeroAlmoxarifado =
-        body.numero_pedido_externo !== undefined ? body.numero_pedido_externo : solicitacaoAtual.numero_pedido_externo;
-      if (consumiuPecas && (!numeroAlmoxarifado || numeroAlmoxarifado.trim() === '')) {
-        return res.status(400).json({
-          bloqueio_regra: true,
-          message: '⛔ REGRA INVIOLÁVEL: Houve consumo de peças. O Nº do Chamado Almoxarifado (Num/Ano) é obrigatório para concluir!',
-        });
-      }
-    }
-
     // ---- Peças: valida tudo antes de gravar qualquer coisa ----
     const mudancasItens: Array<{
       item: (typeof solicitacaoAtual.solicitacao_itens)[number];
@@ -277,10 +271,26 @@ export const updateSolicitacao = async (req: Request, res: Response) => {
       motivo?: string;
     }> = [];
 
+    const mudancasSipac: Array<{
+      item: (typeof solicitacaoAtual.solicitacao_itens)[number];
+      numero_pedido_sipac: string | null;
+      almoxarifado: string | null;
+    }> = [];
+
     for (const pedido of body.itens_entrega ?? []) {
       const item = solicitacaoAtual.solicitacao_itens.find((i) => i.id === pedido.solicitacao_item_id);
       if (!item) throw new RegraNegocioError(400, `A peça ${pedido.solicitacao_item_id} não pertence a esta OS.`);
-      if (item.status_entrega === pedido.status_entrega) continue; // sem mudança
+
+      // Pedido SIPAC / almoxarifado da peça
+      const numero = vazioParaNull(pedido.numero_pedido_sipac);
+      const almox = vazioParaNull(pedido.almoxarifado);
+      const novoNumero = numero !== undefined ? numero : item.numero_pedido_sipac;
+      const novoAlmox = almox !== undefined ? almox : item.almoxarifado;
+      if (novoNumero !== item.numero_pedido_sipac || novoAlmox !== item.almoxarifado) {
+        mudancasSipac.push({ item, numero_pedido_sipac: novoNumero, almoxarifado: novoAlmox });
+      }
+
+      if (pedido.status_entrega === undefined || item.status_entrega === pedido.status_entrega) continue; // sem mudança de status
 
       const transicao = transicaoItem(ator, item.tipo_uso, item.status_entrega, pedido.status_entrega);
       if (!transicao) {
@@ -295,11 +305,35 @@ export const updateSolicitacao = async (req: Request, res: Response) => {
       mudancasItens.push({ item, statusFinal: transicao.statusFinal, efeito: transicao.efeito, motivo: pedido.motivo });
     }
 
+    // Regra: para concluir, TODAS as peças (exceto canceladas) precisam ter Nº do pedido SIPAC e almoxarifado.
+    if (mudouStatus && body.status === OS.CONCLUIDA) {
+      const pendentes = solicitacaoAtual.solicitacao_itens.filter((item) => {
+        const statusFinal = mudancasItens.find((m) => m.item.id === item.id)?.statusFinal ?? item.status_entrega;
+        if (statusFinal === ITEM.CANCELADO) return false;
+        const sipac = mudancasSipac.find((m) => m.item.id === item.id) ?? item;
+        return !sipac.numero_pedido_sipac || !sipac.almoxarifado;
+      });
+      if (pendentes.length) {
+        return res.status(400).json({
+          bloqueio_regra: true,
+          message: `⛔ Para concluir, todas as peças precisam ter o Nº do pedido SIPAC e o almoxarifado. Falta em: ${pendentes
+            .map((i) => i.itens?.descricao)
+            .join(', ')}.`,
+        });
+      }
+    }
+
     // Histórico automático (data/hora gerada no servidor).
     const agora = new Date().toLocaleString('pt-BR');
-    const linhasHistorico = mudancasItens
-      .filter((m) => m.motivo)
-      .map((m) => `[${agora}] Peça "${m.item.itens?.descricao}" devolvida pelo técnico. Motivo: ${m.motivo}`);
+    const linhasHistorico = [
+      ...mudancasItens
+        .filter((m) => m.motivo)
+        .map((m) => `[${agora}] Peça "${m.item.itens?.descricao}" devolvida pelo técnico. Motivo: ${m.motivo}`),
+      ...mudancasSipac.map(
+        (m) =>
+          `[${agora}] Peça "${m.item.itens?.descricao}": pedido SIPAC ${m.numero_pedido_sipac || '—'} / almoxarifado ${m.almoxarifado || '—'}.`,
+      ),
+    ];
     const justificativaBase = body.justificativa !== undefined ? body.justificativa : solicitacaoAtual.justificativa;
     const justificativaFinal = linhasHistorico.length
       ? `${justificativaBase || ''}\n${linhasHistorico.join('\n')}`.trim()
@@ -311,10 +345,16 @@ export const updateSolicitacao = async (req: Request, res: Response) => {
         where: { id: Number(id) },
         data: {
           status: mudouStatus ? body.status : undefined,
-          numero_pedido_externo: body.numero_pedido_externo !== undefined ? body.numero_pedido_externo : undefined,
           justificativa: justificativaFinal,
         },
       });
+
+      for (const m of mudancasSipac) {
+        await tx.solicitacao_itens.update({
+          where: { id: m.item.id },
+          data: { numero_pedido_sipac: m.numero_pedido_sipac, almoxarifado: m.almoxarifado },
+        });
+      }
 
       for (const m of mudancasItens) {
         // Atualização condicional: se outra requisição mudou a peça no meio do caminho, aborta.

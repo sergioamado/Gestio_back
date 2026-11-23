@@ -60,6 +60,8 @@ model solicitacao_itens {
   status_entrega        String       @default("Pendente") @db.VarChar(50)
   data_entrega          DateTime?    @db.Timestamptz(6)
   tipo_uso              String    @default("CONSUMO") // "CONSUMO" ou "TESTE"
+  numero_pedido_sipac   String?   @db.VarChar(100) // Nº do pedido SIPAC desta peça (Num/Ano)
+  almoxarifado          String?   @db.VarChar(100) // Almoxarifado de onde a peça sai
   itens                 itens        @relation(fields: [item_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   solicitacoes          solicitacoes @relation(fields: [solicitacao_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }
@@ -75,7 +77,7 @@ model solicitacoes {
   status                 String    @default("PENDENTE") @db.VarChar(50)
   tipo_requisicao        String    @default("PEDIDO") @db.VarChar(20)
   justificativa          String?   @db.Text
-  numero_pedido_externo  String?   @db.VarChar(100)   // Nº do Chamado Almoxarifado
+  numero_pedido_externo  String?   @db.VarChar(100)   // LEGADO: substituído por solicitacao_itens.numero_pedido_sipac (mantido só para histórico)
   documento_emitido_em   DateTime? @db.Timestamptz(6)
   unidade_id             Int
   producao_servico ProducaoServico[]
