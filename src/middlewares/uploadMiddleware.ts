@@ -36,6 +36,7 @@ const fileFilter = (req: any, file: any, cb: any) => {
   }
 };
 
-const upload = multer({ storage, fileFilter });
+// Limite de 20 MB por arquivo (PDFs/planilhas do SIPAC incluídos).
+const upload = multer({ storage, fileFilter, limits: { fileSize: 20 * 1024 * 1024, files: 1 } });
 
 export default upload;

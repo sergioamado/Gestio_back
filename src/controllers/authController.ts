@@ -4,21 +4,45 @@ import { PrismaClient } from '@prisma/client';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import argon2 from 'argon2';
+import { formatarEspera, registrarFalha, registrarSucesso, tempoBloqueado } from '../security/loginThrottle';
 
 const prisma = new PrismaClient();
 
 export const login = async (req: Request, res: Response) => {
   const { username, password } = req.body;
 
-  if (!username || !password) {
+  if (typeof username !== 'string' || typeof password !== 'string' || !username || !password) {
     return res.status(400).json({ message: 'Usuário e senha são obrigatórios.' });
   }
+
+  // Bloqueio progressivo: checado antes da senha, e vale também para usuários inexistentes
+  // (assim a resposta não revela quais nomes de usuário existem).
+  const restante = tempoBloqueado(username);
+  if (restante > 0) {
+    res.setHeader('Retry-After', Math.ceil(restante / 1000).toString());
+    return res.status(429).json({
+      message: `Muitas tentativas de login. Aguarde ${formatarEspera(restante)} e tente novamente.`,
+      retry_after: Math.ceil(restante / 1000),
+    });
+  }
+
+  const falhaDeLogin = () => {
+    const bloqueio = registrarFalha(username);
+    if (bloqueio > 0) {
+      res.setHeader('Retry-After', Math.ceil(bloqueio / 1000).toString());
+      return res.status(429).json({
+        message: `Credenciais inválidas. Muitas tentativas: aguarde ${formatarEspera(bloqueio)} para tentar de novo.`,
+        retry_after: Math.ceil(bloqueio / 1000),
+      });
+    }
+    return res.status(401).json({ message: 'Credenciais inválidas.' });
+  };
 
   try {
     const user = await prisma.usuarios.findUnique({ where: { username } });
 
     if (!user) {
-      return res.status(401).json({ message: 'Credenciais inválidas.' });
+      return falhaDeLogin();
     }
 
     let passwordIsValid = false;
@@ -37,8 +61,10 @@ export const login = async (req: Request, res: Response) => {
     }
 
     if (!passwordIsValid) {
-      return res.status(401).json({ message: 'Credenciais inválidas.' });
+      return falhaDeLogin();
     }
+
+    registrarSucesso(username);
 
     const token = jwt.sign(
       { id: user.id, role: user.role, unidade_id: user.unidade_id },

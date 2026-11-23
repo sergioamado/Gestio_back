@@ -73,3 +73,11 @@ export const eletronicauAdminMiddlewareOuManager = (req: Request, res: Response,
   }
   next();
 };
+
+// Criação de OS: só técnicos (gerente gere, admin só visualiza).
+export const tecnicoOnlyMiddleware = (req: Request, res: Response, next: NextFunction) => {
+  if (!req.user?.role.startsWith('tecnico')) {
+    return res.status(403).json({ message: 'Acesso negado. Somente técnicos podem abrir Ordens de Serviço.' });
+  }
+  next();
+};

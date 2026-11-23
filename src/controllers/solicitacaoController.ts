@@ -4,6 +4,10 @@ import { PrismaClient, Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { dispararNotificacao } from './notificacaoController';
 import { getIO } from '../socket';
+import {
+  ITEM, OS, efeitoCancelamento, osEncerrada, papelDoAtor, podeConverterTeste, podeMudarStatusOS, transicaoItem,
+  type Ator, type EfeitoEstoque,
+} from '../rules/solicitacaoRules';
 
 const prisma = new PrismaClient();
 
@@ -105,15 +109,17 @@ export const createSolicitacao = async (req: Request, res: Response) => {
       const isTeste = validatedData.tipo_requisicao === 'TESTE';
 
       for (const item of itens) {
-        const itemDb = await tx.itens.findUnique({ where: { id: item.id } });
-        
-        if (!itemDb) throw new Error(`Item não encontrado: ${item.id}`);
-
-        if (isTeste && itemDb.quantidade_teste < item.quantidade) {
-           throw new Error(`Estoque de TESTE insuficiente para: ${itemDb.descricao}`);
-        }
-        if (!isTeste && itemDb.quantidade_estoque < item.quantidade) {
-           throw new Error(`Estoque de CONSUMO insuficiente para: ${itemDb.descricao}`);
+        // Desconta do estoque só se houver saldo: a checagem e o desconto são uma única
+        // operação atômica, então pedidos simultâneos não deixam o estoque negativo.
+        const campo = isTeste ? 'quantidade_teste' : 'quantidade_estoque';
+        const { count } = await tx.itens.updateMany({
+          where: { id: item.id, [campo]: { gte: item.quantidade } },
+          data: { [campo]: { decrement: item.quantidade } },
+        });
+        if (count === 0) {
+          const itemDb = await tx.itens.findUnique({ where: { id: item.id }, select: { descricao: true } });
+          if (!itemDb) throw new Error(`Item não encontrado: ${item.id}`);
+          throw new Error(`Estoque de ${isTeste ? 'TESTE' : 'CONSUMO'} insuficiente para: ${itemDb.descricao}`);
         }
 
         await tx.solicitacao_itens.create({
@@ -124,14 +130,6 @@ export const createSolicitacao = async (req: Request, res: Response) => {
             tipo_uso: isTeste ? 'TESTE' : 'CONSUMO',
             status_entrega: 'Pendente'
           },
-        });
-
-        // Abater do estoque correto
-        await tx.itens.update({
-          where: { id: item.id },
-          data: isTeste 
-            ? { quantidade_teste: { decrement: item.quantidade } }
-            : { quantidade_estoque: { decrement: item.quantidade } }
         });
       }
       return solicitacao;
@@ -152,83 +150,239 @@ export const createSolicitacao = async (req: Request, res: Response) => {
 };
 
 
+// Notifica os gerentes da unidade da OS (exceto quem fez a ação).
+const notificarGerentesDaUnidade = async (
+  unidadeId: number | null,
+  excetoId: number,
+  titulo: string,
+  mensagem: string,
+) => {
+  if (!unidadeId) return;
+  const gerentes = await prisma.usuarios.findMany({
+    where: { role: 'gerente', unidade_id: unidadeId },
+    select: { id: true },
+  });
+  for (const g of gerentes) {
+    if (g.id === excetoId) continue;
+    await dispararNotificacao({ usuario_id: g.id, titulo, mensagem, tipo: 'info', link_acao: '/gerenciar-solicitacoes' });
+  }
+};
+
+type Tx = Prisma.TransactionClient;
+
+const aplicarEfeitoEstoque = async (tx: Tx, itemId: number, quantidade: number, efeito: EfeitoEstoque) => {
+  const campo =
+    efeito === 'estoque+' ? 'quantidade_estoque'
+    : efeito === 'teste+' ? 'quantidade_teste'
+    : efeito === 'defeito+' ? 'quantidade_defeito'
+    : null;
+  if (!campo) return;
+  await tx.itens.update({ where: { id: itemId }, data: { [campo]: { increment: quantidade } } });
+};
+
+class RegraNegocioError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+  }
+}
+
+/**
+ * Verifica se o usuário pode agir nesta OS:
+ * - admin: só visualiza;
+ * - gerente: só OS da própria unidade;
+ * - técnico: só OS que ele abriu.
+ */
+const verificarPermissaoNaOS = (
+  user: { id: number; role: string; unidade_id: number | null },
+  os: { usuario_id: number; unidade_id: number },
+): Ator => {
+  const ator = papelDoAtor(user.role);
+  if (ator === 'admin') throw new RegraNegocioError(403, 'O administrador tem acesso somente de visualização às Ordens de Serviço.');
+  if (ator === 'gerente' && os.unidade_id !== user.unidade_id) {
+    throw new RegraNegocioError(403, 'Você só pode gerir Ordens de Serviço da sua unidade.');
+  }
+  if (ator === 'tecnico' && os.usuario_id !== user.id) {
+    throw new RegraNegocioError(403, 'Você só pode agir nas Ordens de Serviço que abriu.');
+  }
+  if (ator === 'outro') throw new RegraNegocioError(403, 'Acesso negado.');
+  return ator;
+};
+
+const itemEntregaSchema = z.object({
+  solicitacao_item_id: z.number().int(),
+  status_entrega: z.string(),
+  motivo: z.string().trim().max(500).optional(),
+});
+
+const updateSolicitacaoSchema = z.object({
+  status: z.string().optional(),
+  numero_pedido_externo: z.string().nullable().optional(),
+  justificativa: z.string().nullable().optional(),
+  itens_entrega: z.array(itemEntregaSchema).optional(),
+});
+
 export const updateSolicitacao = async (req: Request, res: Response) => {
   const { id } = req.params;
-  const { status, numero_pedido_externo, justificativa, itens_entrega } = req.body;
-  const idUsuarioAcao = req.user!.id;
+  const user = req.user!;
 
   try {
+    const body = updateSolicitacaoSchema.parse(req.body);
+
     const solicitacaoAtual = await prisma.solicitacoes.findUnique({
       where: { id: Number(id) },
-      include: { solicitacao_itens: true }
+      include: { solicitacao_itens: { include: { itens: { select: { descricao: true } } } } },
     });
-
     if (!solicitacaoAtual) return res.status(404).json({ message: 'OS não encontrada.' });
 
-    //  A REGRA INVIOLÁVEL: Verificar Consumo no Fechamento
-    if (status === 'CONCLUIDA') {
-      const consumiuPecas = solicitacaoAtual.solicitacao_itens.some(
-        (item) => item.tipo_uso === 'CONSUMO' && item.status_entrega !== 'Cancelado'
-      );
-      
-      const numeroAlmoxarifado = numero_pedido_externo !== undefined ? numero_pedido_externo : solicitacaoAtual.numero_pedido_externo;
+    const ator = verificarPermissaoNaOS(user, solicitacaoAtual);
 
+    if (osEncerrada(solicitacaoAtual.status)) {
+      throw new RegraNegocioError(400, 'Esta OS já está encerrada e não pode ser alterada.');
+    }
+
+    // Técnico não edita dados administrativos da OS.
+    if (ator === 'tecnico' && (body.numero_pedido_externo !== undefined || body.justificativa !== undefined)) {
+      throw new RegraNegocioError(403, 'Somente o gerente pode alterar o chamado do almoxarifado e o histórico da OS.');
+    }
+
+    // ---- Status da OS ----
+    const mudouStatus = body.status !== undefined && body.status !== solicitacaoAtual.status;
+    if (mudouStatus && !podeMudarStatusOS(ator, solicitacaoAtual.status, body.status!)) {
+      throw new RegraNegocioError(
+        400,
+        `Transição não permitida: "${solicitacaoAtual.status}" → "${body.status}" para o perfil ${ator}.`,
+      );
+    }
+
+    // Regra: houve consumo de peças → nº do chamado do almoxarifado é obrigatório para concluir.
+    if (mudouStatus && body.status === OS.CONCLUIDA) {
+      const consumiuPecas = solicitacaoAtual.solicitacao_itens.some(
+        (item) => item.tipo_uso === 'CONSUMO' && item.status_entrega !== 'Cancelado',
+      );
+      const numeroAlmoxarifado =
+        body.numero_pedido_externo !== undefined ? body.numero_pedido_externo : solicitacaoAtual.numero_pedido_externo;
       if (consumiuPecas && (!numeroAlmoxarifado || numeroAlmoxarifado.trim() === '')) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           bloqueio_regra: true,
-          message: '⛔ REGRA INVIOLÁVEL: Houve consumo de peças. O Nº do Chamado Almoxarifado (Num/Ano) é obrigatório para concluir!' 
+          message: '⛔ REGRA INVIOLÁVEL: Houve consumo de peças. O Nº do Chamado Almoxarifado (Num/Ano) é obrigatório para concluir!',
         });
       }
     }
 
+    // ---- Peças: valida tudo antes de gravar qualquer coisa ----
+    const mudancasItens: Array<{
+      item: (typeof solicitacaoAtual.solicitacao_itens)[number];
+      statusFinal: string;
+      efeito: EfeitoEstoque;
+      motivo?: string;
+    }> = [];
+
+    for (const pedido of body.itens_entrega ?? []) {
+      const item = solicitacaoAtual.solicitacao_itens.find((i) => i.id === pedido.solicitacao_item_id);
+      if (!item) throw new RegraNegocioError(400, `A peça ${pedido.solicitacao_item_id} não pertence a esta OS.`);
+      if (item.status_entrega === pedido.status_entrega) continue; // sem mudança
+
+      const transicao = transicaoItem(ator, item.tipo_uso, item.status_entrega, pedido.status_entrega);
+      if (!transicao) {
+        throw new RegraNegocioError(
+          400,
+          `Transição não permitida para a peça "${item.itens?.descricao}": "${item.status_entrega}" → "${pedido.status_entrega}".`,
+        );
+      }
+      if (transicao.statusFinal === ITEM.DEVOLVIDA && !pedido.motivo) {
+        throw new RegraNegocioError(400, 'Informe o motivo da devolução da peça.');
+      }
+      mudancasItens.push({ item, statusFinal: transicao.statusFinal, efeito: transicao.efeito, motivo: pedido.motivo });
+    }
+
+    // Histórico automático (data/hora gerada no servidor).
+    const agora = new Date().toLocaleString('pt-BR');
+    const linhasHistorico = mudancasItens
+      .filter((m) => m.motivo)
+      .map((m) => `[${agora}] Peça "${m.item.itens?.descricao}" devolvida pelo técnico. Motivo: ${m.motivo}`);
+    const justificativaBase = body.justificativa !== undefined ? body.justificativa : solicitacaoAtual.justificativa;
+    const justificativaFinal = linhasHistorico.length
+      ? `${justificativaBase || ''}\n${linhasHistorico.join('\n')}`.trim()
+      : justificativaBase;
+
+    let pecasDevolvidas = 0;
     const resultado = await prisma.$transaction(async (tx) => {
-      //  Atualizar a OS Principal
       const osAtualizada = await tx.solicitacoes.update({
         where: { id: Number(id) },
         data: {
-          status: status !== undefined ? status : solicitacaoAtual.status,
-          numero_pedido_externo: numero_pedido_externo !== undefined ? numero_pedido_externo : solicitacaoAtual.numero_pedido_externo,
-          justificativa: justificativa !== undefined ? justificativa : solicitacaoAtual.justificativa,
-        }
+          status: mudouStatus ? body.status : undefined,
+          numero_pedido_externo: body.numero_pedido_externo !== undefined ? body.numero_pedido_externo : undefined,
+          justificativa: justificativaFinal,
+        },
       });
 
-      // Atualizar Status das Peças (Se enviado pelo Frontend)
-      if (itens_entrega && Array.isArray(itens_entrega)) {
-        for (const itemRequest of itens_entrega) {
-          const itemDbAtual = solicitacaoAtual.solicitacao_itens.find(i => i.id === itemRequest.solicitacao_item_id);
-          
-          if (itemDbAtual && itemDbAtual.status_entrega !== itemRequest.status_entrega) {
-            
-            //  Técnico devolveu peça de CONSUMO alegando Defeito/Erro
-            if (itemRequest.status_entrega === 'Devolvida' && itemDbAtual.tipo_uso === 'CONSUMO') {
-                await tx.itens.update({
-                    where: { id: itemDbAtual.item_id },
-                    data: { quantidade_defeito: { increment: itemDbAtual.quantidade_solicitada } }
-                });
-            }
+      for (const m of mudancasItens) {
+        // Atualização condicional: se outra requisição mudou a peça no meio do caminho, aborta.
+        const { count } = await tx.solicitacao_itens.updateMany({
+          where: { id: m.item.id, status_entrega: m.item.status_entrega },
+          data: { status_entrega: m.statusFinal, data_entrega: m.statusFinal === ITEM.ENTREGUE ? new Date() : undefined },
+        });
+        if (count === 0) throw new RegraNegocioError(409, 'A OS foi alterada por outra pessoa. Recarregue a página e tente de novo.');
 
-            //  GESTOR aceitou fisicamente o retorno de uma peça de TESTE
-            // A peça volta para a gaveta de testes bons!
-            if (itemRequest.status_entrega === 'Devolução Aceite' && itemDbAtual.tipo_uso === 'TESTE') {
-                await tx.itens.update({
-                    where: { id: itemDbAtual.item_id },
-                    data: { quantidade_teste: { increment: itemDbAtual.quantidade_solicitada } }
-                });
-            }
-            
-            await tx.solicitacao_itens.update({
-              where: { id: itemRequest.solicitacao_item_id },
-              data: { status_entrega: itemRequest.status_entrega }
-            });
-          }
+        await aplicarEfeitoEstoque(tx, m.item.item_id, m.item.quantidade_solicitada, m.efeito);
+      }
+
+      // OS cancelada: as peças voltam ao estoque correspondente (teste ou consumo).
+      if (mudouStatus && body.status === OS.CANCELADA) {
+        for (const item of solicitacaoAtual.solicitacao_itens) {
+          const statusAtual = mudancasItens.find((m) => m.item.id === item.id)?.statusFinal ?? item.status_entrega;
+          const efeito = efeitoCancelamento(item.tipo_uso, statusAtual);
+          if (efeito === null) continue;
+
+          const { count } = await tx.solicitacao_itens.updateMany({
+            where: { id: item.id, status_entrega: statusAtual },
+            data: { status_entrega: ITEM.CANCELADO },
+          });
+          if (count === 0) throw new RegraNegocioError(409, 'A OS foi alterada por outra pessoa. Recarregue a página e tente de novo.');
+          await aplicarEfeitoEstoque(tx, item.item_id, item.quantidade_solicitada, efeito);
+          pecasDevolvidas++;
         }
       }
       return osAtualizada;
     });
-    try { getIO().emit('atualizar_estoque'); } catch(e) {}
-    res.status(200).json(resultado);
 
+    // ---- Notificações ----
+    const glpi = solicitacaoAtual.numero_glpi;
+    if (ator === 'gerente') {
+      const partes: string[] = [];
+      if (mudouStatus) partes.push(`Status da OS: *${body.status}*.`);
+      if (pecasDevolvidas) partes.push(`${pecasDevolvidas} peça(s) devolvida(s) ao estoque.`);
+      for (const m of mudancasItens) partes.push(`Peça *${m.item.itens?.descricao}*: ${m.statusFinal}.`);
+      if (partes.length && solicitacaoAtual.usuario_id !== user.id) {
+        await dispararNotificacao({
+          usuario_id: solicitacaoAtual.usuario_id,
+          titulo: '🔄 Atualização na sua OS',
+          mensagem: `OS (GLPI: ${glpi})\n${partes.join('\n')}`,
+          tipo: body.status === OS.CANCELADA ? 'alerta' : 'info',
+          link_acao: '/gerenciar-solicitacoes',
+        });
+      }
+    } else {
+      const partes: string[] = [];
+      if (mudouStatus) partes.push('A OS está *pronta para vistoria*.');
+      for (const m of mudancasItens) {
+        partes.push(
+          m.statusFinal === ITEM.DEVOLVIDA
+            ? `Peça *${m.item.itens?.descricao}* devolvida com defeito: ${m.motivo}.`
+            : `Peça *${m.item.itens?.descricao}* recebida pelo técnico.`,
+        );
+      }
+      if (partes.length) {
+        await notificarGerentesDaUnidade(solicitacaoAtual.unidade_id, user.id, '🧑‍🔧 Ação do técnico na OS', `OS (GLPI: ${glpi})\n${partes.join('\n')}`);
+      }
+    }
+
+    try { getIO().emit('atualizar_tabelas_os'); } catch (e) {}
+    try { getIO().emit('atualizar_estoque'); } catch (e) {}
+    res.status(200).json(resultado);
   } catch (error) {
+    if (error instanceof RegraNegocioError) return res.status(error.status).json({ message: error.message });
+    if (error instanceof z.ZodError) return res.status(400).json({ message: 'Dados inválidos.', details: error.issues });
     console.error('Erro no updateSolicitacao:', error);
     res.status(500).json({ message: 'Erro interno.' });
   }
@@ -260,79 +414,6 @@ export const getSolicitacaoById = async (req: Request, res: Response) => {
   }
 };
 
-
-
-
-export const updateStatusSolicitacao = async (req: Request, res: Response) => {
-    const { id } = req.params;
-    const { status, nova_justificativa } = req.body;
-    const idUsuarioAcao = req.user!.id; 
-
-    if (!status) return res.status(400).json({ message: 'O status é obrigatório.' });
-
-    try {
-        const solicitacaoAtual = await prisma.solicitacoes.findUnique({ where: { id: Number(id) } });
-        if (!solicitacaoAtual) return res.status(404).json({ message: 'Solicitação não encontrada' });
-        
-        const justificativaAtualizada = nova_justificativa 
-            ? `${(solicitacaoAtual as any)?.justificativa || ''}\n[${new Date().toLocaleString()}] Admin: ${nova_justificativa}`
-            : (solicitacaoAtual as any)?.justificativa;
-
-        const solicitacao = await prisma.solicitacoes.update({
-            where: { id: Number(id) },
-            data: { status, justificativa: justificativaAtualizada } as any, 
-        });
-
-        let iconeTipo = 'info';
-        if (status === 'APROVADA') iconeTipo = 'sucesso';
-        if (status === 'REJEITADA' || status === 'CANCELADA') iconeTipo = 'alerta';
-
-        if (solicitacao.usuario_id !== idUsuarioAcao) {
-          await dispararNotificacao({
-            usuario_id: solicitacao.usuario_id,
-            titulo: '🔄 Atualização de Status',
-            mensagem: `A sua solicitação (GLPI: ${solicitacao.numero_glpi}) mudou para: *${status}*.${nova_justificativa ? `\n\n📝 Obs: ${nova_justificativa}` : ''}`,
-            tipo: iconeTipo,
-            link_acao: '/gerenciar-solicitacoes'
-          });
-        }
-
-        const gestores = await prisma.usuarios.findMany({
-          where: {
-            OR: [
-              { role: 'admin' },
-              { role: 'gerente', unidade_id: solicitacao.unidade_id }
-            ]
-          }
-        });
-
-        console.log("🕵️‍♂️ GESTORES ENCONTRADOS PARA NOTIFICAR:", gestores.map(g => g.nome_completo));
-
-        // Dispara para todos os gestores/admins encontrados
-        for (const gestor of gestores) {
-          if (gestor.id !== idUsuarioAcao) {
-            await dispararNotificacao({
-              usuario_id: gestor.id,
-              titulo: '📊 OS Atualizada',
-              mensagem: `A OS (GLPI: ${solicitacao.numero_glpi}) foi alterada para *${status}*.`,
-              tipo: 'info',
-              link_acao: '/gerenciar-solicitacoes'
-            });
-          }
-        }
-
-        // O GRITO GLOBAL FICA AQUI 
-        try { getIO().emit('atualizar_tabelas_os'); } catch (err) {}
-        try { getIO().emit('atualizar_estoque'); } catch(e) {}
-        
-        return res.json(solicitacao);
-        
-
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ message: 'Erro ao atualizar status.' });
-    }
-};
 
 
 
@@ -369,205 +450,77 @@ export const getLatestSolicitacoes = async (req: Request, res: Response) => {
     }
 };
 
-export const updateSolicitacaoItemStatus = async (req: Request, res: Response) => {
-    const { itemId } = req.params;
-    const { status_entrega } = req.body;
-
-    try {
-        const solicitacao_itens = await prisma.solicitacao_itens.findUnique({
-            where: { id: Number(itemId) },
-            include: { solicitacoes: true, itens: true }
-        });
-
-        if (!solicitacao_itens) {
-            return res.status(404).json({ message: 'Item da solicitação não encontrado.' });
-        }
-
-        if (solicitacao_itens.solicitacoes.status === 'CONCLUIDA' || solicitacao_itens.solicitacoes.status === 'CANCELADA') {
-            return res.status(400).json({ message: 'Ação negada. Não é possível alterar peças de um chamado já encerrado.' });
-        }
-
-        // Gerente não pode entregar peça se a OS não estiver aprovada/em andamento
-        if (status_entrega === 'Entregue' && solicitacao_itens.solicitacoes.status === 'PENDENTE') {
-            return res.status(400).json({ message: 'A OS precisa ser APROVADA pelo gerente antes de entregar peças.' });
-        }
-
-        const resultado = await prisma.$transaction(async (tx) => {
-            const itemAtualizado = await tx.solicitacao_itens.update({
-                where: { id: Number(itemId) },
-                data: { 
-                    status_entrega,
-                    data_entrega: status_entrega === 'Entregue' ? new Date() : solicitacao_itens.data_entrega
-                },
-            });
-
-            // Gerente confirma o recebimento de uma peça CANCELADA (Volta pro estoque)
-            if (status_entrega === 'Cancelado' && solicitacao_itens.status_entrega === 'Devolução Pendente (Cancelado)') {
-                await tx.itens.update({
-                    where: { id: solicitacao_itens.item_id },
-                    data: solicitacao_itens.tipo_uso === 'TESTE' 
-                      ? { quantidade_teste: { increment: solicitacao_itens.quantidade_solicitada } }
-                      : { quantidade_estoque: { increment: solicitacao_itens.quantidade_solicitada } }
-                });
-            }
-
-            // Gerente confirma o recebimento de uma peça com DEFEITO (Vai pro lixo/garantia)
-            if (status_entrega === 'Defeito' && solicitacao_itens.status_entrega === 'Devolução Pendente (Defeito)') {
-                await tx.itens.update({
-                    where: { id: solicitacao_itens.item_id },
-                    data: { quantidade_defeito: { increment: solicitacao_itens.quantidade_solicitada } }
-                });
-            }
-
-            // Lógica antiga (caso seja uma devolução simples de teste que funcionou)
-            if (status_entrega === 'Devolvido' && solicitacao_itens.status_entrega !== 'Devolvido') {
-                await tx.itens.update({
-                    where: { id: solicitacao_itens.item_id },
-                    data: { quantidade_estoque: { increment: solicitacao_itens.quantidade_solicitada } }
-                });
-            }
-
-            return itemAtualizado;
-        });
-
-        // NOTIFICAÇÃO
-        await dispararNotificacao({
-          usuario_id: solicitacao_itens.solicitacoes.usuario_id,
-          titulo: '🛠️ Atualização de Peça/Equipamento',
-          mensagem: `A peça/equipamento *${solicitacao_itens.itens.descricao}* da OS ${solicitacao_itens.solicitacoes.numero_glpi} foi marcada como: *${status_entrega}*.`,
-          tipo: status_entrega === 'Entregue' ? 'sucesso' : 'info',
-          link_acao: '/gerenciar-solicitacoes'
-        });
-        
-        try { getIO().emit('atualizar_estoque'); } catch(e) {}
-        res.json(resultado);
-    } catch (error) {
-        res.status(500).json({ message: 'Erro ao atualizar status do item.' });
-    }
-};
-
-
-export const cancelarItemSolicitacao = async (req: Request, res: Response) => {
-  const { itemId } = req.params;
-
-  try {
-    const item = await prisma.solicitacao_itens.findUnique({ 
-        where: { id: Number(itemId) }, include: { solicitacoes: true }
-    });
-    
-    if (!item) return res.status(404).json({ message: "Item não encontrado." });
-
-    if (item.solicitacoes.status === 'CONCLUIDA' || item.solicitacoes.status === 'CANCELADA') {
-        return res.status(400).json({ message: 'Ação negada. A OS já está encerrada.' });
-    }
-
-    // 🚀 O Técnico apenas avisa que quer cancelar. O estoque NÃO é alterado aqui!
-    await prisma.solicitacao_itens.update({
-        where: { id: Number(itemId) },
-        data: { status_entrega: 'Devolução Pendente (Cancelado)' }
-    });
-
-    try { getIO().emit('atualizar_tabelas_os'); } catch(e) {}
-    res.status(200).json({ message: "Intenção de cancelamento registrada. Entregue a peça ao gestor para baixa no SIPAC." });
-  } catch (error) {
-    res.status(500).json({ message: "Erro ao cancelar item." });
-  }
-};
-
-export const sinalizarDefeitoItem = async (req: Request, res: Response) => {
-  const { itemId } = req.params;
-
-  try {
-    const solicitacao_itens = await prisma.solicitacao_itens.findUnique({
-      where: { id: Number(itemId) }, include: { solicitacoes: true }
-    });
-
-    if (!solicitacao_itens) return res.status(404).json({ message: "Item não encontrado." });
-
-    if (solicitacao_itens.solicitacoes.status === 'CONCLUIDA' || solicitacao_itens.solicitacoes.status === 'CANCELADA') {
-        return res.status(400).json({ message: 'Ação negada. A OS já está encerrada.' });
-    }
-    
-    // O Técnico apenas avisa que há defeito. O estoque NÃO é alterado aqui!
-    await prisma.solicitacao_itens.update({
-      where: { id: Number(itemId) },
-      data: { status_entrega: 'Devolução Pendente (Defeito)' }
-    });
-
-    try { getIO().emit('atualizar_tabelas_os'); } catch(e) {}
-    return res.status(200).json({ message: "Defeito sinalizado. Entregue a peça ao gestor para trâmite do SIPAC." });
-  } catch (error) {
-    return res.status(500).json({ message: "Erro ao registrar defeito." });
-  }
-};
-
-
 export const converterTesteEmConsumo = async (req: Request, res: Response) => {
   const { itemId } = req.params;
+  const user = req.user!;
 
   try {
     const itemAtual = await prisma.solicitacao_itens.findUnique({
       where: { id: Number(itemId) },
-      include: { solicitacoes: true, itens: true }
+      include: { solicitacoes: { include: { solicitacao_itens: true } }, itens: true },
     });
 
     if (!itemAtual) return res.status(404).json({ message: "Item não encontrado." });
-    if (itemAtual.tipo_uso !== 'TESTE') {
-      return res.status(400).json({ message: "Este item não é de teste." });
+
+    const ator = verificarPermissaoNaOS(user, itemAtual.solicitacoes);
+    if (ator !== 'tecnico') throw new RegraNegocioError(403, 'Somente o técnico da OS pode pedir a peça definitiva.');
+    if (osEncerrada(itemAtual.solicitacoes.status)) throw new RegraNegocioError(400, 'Esta OS já está encerrada.');
+    if (!podeConverterTeste(itemAtual.tipo_uso, itemAtual.status_entrega)) {
+      throw new RegraNegocioError(400, 'Só é possível pedir a definitiva de uma peça de teste que está com o técnico.');
     }
+    // Evita pedir a mesma definitiva duas vezes.
+    const jaPediu = itemAtual.solicitacoes.solicitacao_itens.some(
+      (i) => i.item_id === itemAtual.item_id && i.tipo_uso === 'CONSUMO' && i.id !== itemAtual.id,
+    );
+    if (jaPediu) throw new RegraNegocioError(409, 'A peça definitiva já foi solicitada nesta OS.');
 
     const resultado = await prisma.$transaction(async (tx) => {
-      //  Verifica se há estoque de consumo disponível para a peça definitiva
-      if (itemAtual.itens.quantidade_estoque < itemAtual.quantidade_solicitada) {
-        throw new Error(`Sem estoque de CONSUMO suficiente para a peça: ${itemAtual.itens.descricao}`);
+      // Desconta do estoque de consumo só se houver saldo (atômico: evita estoque negativo).
+      const { count } = await tx.itens.updateMany({
+        where: { id: itemAtual.item_id, quantidade_estoque: { gte: itemAtual.quantidade_solicitada } },
+        data: { quantidade_estoque: { decrement: itemAtual.quantidade_solicitada } },
+      });
+      if (count === 0) {
+        throw new RegraNegocioError(400, `Sem estoque de CONSUMO suficiente para a peça: ${itemAtual.itens.descricao}`);
       }
 
-      //  Muda o status da peça de Teste para devolução
+      // A peça de teste continua aguardando devolução ao almoxarifado.
       await tx.solicitacao_itens.update({
         where: { id: Number(itemId) },
-        data: { status_entrega: 'Aguardando Devolução' }
+        data: { status_entrega: ITEM.AGUARDANDO_DEVOLUCAO },
       });
 
-      //  Desconta a peça nova do estoque de Consumo
-      await tx.itens.update({
-        where: { id: itemAtual.item_id },
-        data: { quantidade_estoque: { decrement: itemAtual.quantidade_solicitada } }
-      });
-
-      // Adiciona a nova peça (Consumo) à OS, com status "Pendente" para o Gestor separar
       const novoItemConsumo = await tx.solicitacao_itens.create({
         data: {
           solicitacao_id: itemAtual.solicitacao_id,
           item_id: itemAtual.item_id,
           quantidade_solicitada: itemAtual.quantidade_solicitada,
           tipo_uso: 'CONSUMO',
-          status_entrega: 'Pendente'
-        }
+          status_entrega: ITEM.PENDENTE,
+        },
       });
 
-      // 5. Atualiza o Histórico/Justificativa da OS para não haver dúvidas
       const novaJustificativa = `${itemAtual.solicitacoes.justificativa || ''}\n[${new Date().toLocaleString('pt-BR')}] Peça de teste "${itemAtual.itens.descricao}" funcionou. Solicitada a peça definitiva de consumo. Aguardando troca.`.trim();
-      
       await tx.solicitacoes.update({
         where: { id: itemAtual.solicitacao_id },
-        data: { justificativa: novaJustificativa }
+        data: { justificativa: novaJustificativa },
       });
 
       return novoItemConsumo;
     });
 
-    // Opcional: Notificar o gestor para separar a peça definitiva
-    await dispararNotificacao({
-        usuario_id: itemAtual.solicitacoes.responsavel_usuario_id,
-        titulo: '🔄 Peça de Consumo Solicitada',
-        mensagem: `O técnico confirmou o teste da peça ${itemAtual.itens.descricao} na OS ${itemAtual.solicitacoes.numero_glpi}. A peça de teste será devolvida e a definitiva precisa ser separada.`,
-        tipo: 'info',
-        link_acao: '/gerenciar-solicitacoes'
-    });
-    try { getIO().emit('atualizar_estoque'); } catch(e) {}
+    await notificarGerentesDaUnidade(
+      itemAtual.solicitacoes.unidade_id,
+      user.id,
+      '🔄 Peça de Consumo Solicitada',
+      `O técnico confirmou o teste da peça ${itemAtual.itens.descricao} na OS ${itemAtual.solicitacoes.numero_glpi}. A peça de teste será devolvida e a definitiva precisa ser separada.`,
+    );
+    try { getIO().emit('atualizar_tabelas_os'); } catch (e) {}
+    try { getIO().emit('atualizar_estoque'); } catch (e) {}
     return res.status(200).json({ message: "Conversão realizada com sucesso!", data: resultado });
   } catch (error: any) {
+    if (error instanceof RegraNegocioError) return res.status(error.status).json({ message: error.message });
     console.error(error);
-    return res.status(400).json({ message: error.message || "Erro ao converter item de teste em consumo." });
+    return res.status(500).json({ message: "Erro ao converter item de teste em consumo." });
   }
 };

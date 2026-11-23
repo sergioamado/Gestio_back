@@ -31,7 +31,6 @@
     "@types/node-telegram-bot-api": "^0.64.14",
     "@types/pdf-parse": "^1.1.5",
     "@types/socket.io": "^3.0.1",
-    "@types/xlsx": "^0.0.35",
     "@typescript-eslint/eslint-plugin": "^8.44.1",
     "@typescript-eslint/parser": "^8.44.1",
     "eslint": "^9.36.0",
@@ -58,7 +57,7 @@
     "pdf-parse": "^2.4.5",
     "pg": "^8.20.0",
     "socket.io": "^4.8.3",
-    "xlsx": "^0.18.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.1.11"
   }
 }

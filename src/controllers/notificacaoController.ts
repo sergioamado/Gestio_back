@@ -162,11 +162,13 @@ export const getNotificacoes = async (req: Request, res: Response) => {
 export const marcarComoLida = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const notificacao = await prisma.notificacoes.update({
-      where: { id: Number(id) },
+    // Só marca se a notificação for do próprio usuário.
+    const { count } = await prisma.notificacoes.updateMany({
+      where: { id: Number(id), usuario_id: req.user!.id },
       data: { lida: true }
     });
-    res.json(notificacao);
+    if (count === 0) return res.status(404).json({ message: 'Notificação não encontrada.' });
+    res.json({ id: Number(id), lida: true });
   } catch (error) {
     res.status(500).json({ message: 'Erro ao marcar como lida' });
   }

@@ -1,26 +1,36 @@
 // Gestio_back/src/socket.ts
 import { Server } from 'socket.io';
+import jwt from 'jsonwebtoken';
+import type { Server as HttpServer } from 'http';
 
 let io: Server;
 
-export const initSocket = (server: any) => {
+export const initSocket = (server: HttpServer) => {
   io = new Server(server, {
-    cors: { origin: '*' } // (as suas configurações de CORS)
+    cors: { origin: '*' },
+  });
+
+  // Autenticação no handshake: o cliente envia o JWT em `auth.token`.
+  // Sem token válido, a conexão é recusada.
+  io.use((socket, next) => {
+    const token = socket.handshake.auth?.token;
+    if (!token) return next(new Error('Não autenticado'));
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as { id: number };
+      socket.data.userId = decoded.id;
+      next();
+    } catch {
+      next(new Error('Token inválido'));
+    }
   });
 
   io.on('connection', (socket) => {
-    console.log('Novo cliente conectado:', socket.id);
+    // A sala vem do token, nunca do que o cliente diz ser.
+    const userId: number = socket.data.userId;
+    socket.join(`user_${userId}`);
 
-    // Colocar o utilizador na sala certa!
-    socket.on('identificar_usuario', (userId) => {
-      const roomName = `user_${userId}`;
-      socket.join(roomName);
-      console.log(`O utilizador ${userId} sintonizou a sala ${roomName}`);
-    });
-
-    socket.on('disconnect', () => {
-      console.log('Cliente desconectado:', socket.id);
-    });
+    // Mantido por compatibilidade com clientes antigos; o id enviado é ignorado.
+    socket.on('identificar_usuario', () => socket.join(`user_${userId}`));
   });
 
   return io;

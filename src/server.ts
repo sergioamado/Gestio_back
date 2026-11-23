@@ -15,7 +15,9 @@ import patrimonioRoutes from './routes/patrimonioRoutes';
 import servicosRoutes from './routes/servicosRoutes';
 import analiseRoutes from './routes/analiseRoutes';
 import { initSocket } from './socket';
+import registroProducaoRoutes from './routes/registroProducaoRoutes'; // Importação da rota de registro de produção
 import http from 'http';
+import { authMiddleware, managerOrAdminMiddleware } from './middlewares/authMiddleware';
 
 import path from 'path';
 import fs from 'fs';
@@ -45,9 +47,11 @@ app.use('/api/estatisticas', estatisticasRoutes);
 app.use('/api/patrimonio', patrimonioRoutes);
 app.use('/api/servicos', servicosRoutes);
 app.use('/api/analise', analiseRoutes);
+app.use('/api/producao', registroProducaoRoutes); 
 
 
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+// Arquivos enviados (fotos de patrimônio): só para usuários logados com acesso ao patrimônio.
+app.use('/uploads', authMiddleware, managerOrAdminMiddleware, express.static(path.join(__dirname, '../uploads')));
 
 const uploadDir = './uploads/patrimonio';
 if (!fs.existsSync(uploadDir)) {

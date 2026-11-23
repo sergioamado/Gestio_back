@@ -176,7 +176,7 @@ export const runQuery = async (req: Request, res: Response) => {
 export const saveDashboard = async (req: Request, res: Response) => {
   try {
     const { nome, descricao, widgets } = req.body;
-    const usuario_id = req.user?.id || 1; 
+    const usuario_id = req.user!.id;
 
     const novoDash = await prisma.dashboard.create({
       data: {

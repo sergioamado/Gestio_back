@@ -102,6 +102,8 @@ model unidades_organizacionais {
   bens                   BemPatrimonial[]
   movimentacoes_origem   MovimentacaoBem[]       @relation("OrigemBem")
   movimentacoes_destino  MovimentacaoBem[]       @relation("DestinoBem")
+  historicos_origem  HistoricoPatrimonio[] @relation("historico_origem")
+  historicos_destino HistoricoPatrimonio[] @relation("historico_destino")
 }
 
 model usuarios {
@@ -296,17 +298,21 @@ model AtribuicaoTecnico {
 
 // Novo modelo para auditoria e histórico de bens (Inventário #1 e #2)
 model HistoricoPatrimonio {
-  id            Int      @id @default(autoincrement())
-  bem_id        Int
-  usuario_id    Int // Quem executou a ação no sistema
-  tecnico_id    Int? // Técnico alvo da ação (se aplicável)
-  acao          String   @db.VarChar(100) // "Atribuição", "Devolução", "Transferência"
-  detalhes      String?  @db.Text
-  data_registro DateTime @default(now()) @db.Timestamptz(6)
+  id                 Int      @id @default(autoincrement())
+  bem_id             Int
+  usuario_id         Int // Quem executou a ação no sistema
+  tecnico_id         Int? // Técnico alvo da ação (se aplicável)
+  origem_unidade_id  Int? // Setor de origem (em transferências)
+  destino_unidade_id Int? // Setor de destino (em transferências)
+  acao               String   @db.VarChar(100) // "Atribuição", "Devolução", "Transferência"
+  detalhes           String?  @db.Text
+  data_registro      DateTime @default(now()) @db.Timestamptz(6)
 
-  bem          BemPatrimonial @relation(fields: [bem_id], references: [id], onDelete: Cascade)
-  usuario_acao usuarios       @relation("usuario_acao", fields: [usuario_id], references: [id])
-  tecnico_alvo usuarios?      @relation("tecnico_envolvido", fields: [tecnico_id], references: [id])
+  bem             BemPatrimonial            @relation(fields: [bem_id], references: [id], onDelete: Cascade)
+  usuario_acao    usuarios                  @relation("usuario_acao", fields: [usuario_id], references: [id])
+  tecnico_alvo    usuarios?                 @relation("tecnico_envolvido", fields: [tecnico_id], references: [id])
+  unidade_origem  unidades_organizacionais? @relation("historico_origem", fields: [origem_unidade_id], references: [id])
+  unidade_destino unidades_organizacionais? @relation("historico_destino", fields: [destino_unidade_id], references: [id])
 }
 
 model MovimentacaoBem {
@@ -397,6 +403,7 @@ model ProducaoServico {
   // O Técnico que executou a ação
   tecnico_id              Int
   tecnico                 usuarios @relation(fields: [tecnico_id], references: [id])
+  quantidade              Int     @default(1)
   
   // O Serviço executado
   servico_id              Int

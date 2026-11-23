@@ -26,6 +26,7 @@ const bemPatrimonialSchema = z.object({
   unidade_id: z.number().int("Unidade é obrigatória")
 });
 
+
 //  ALIMENTAÇÃO DO BANCO DE DADOS
 
 export const createBem = async (req: Request, res: Response) => {
@@ -47,6 +48,8 @@ export const createBem = async (req: Request, res: Response) => {
   }
 };
 
+
+
 export const updateBem = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
@@ -61,6 +64,8 @@ export const updateBem = async (req: Request, res: Response) => {
   }
 };
 
+
+
 export const deleteBem = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
@@ -70,6 +75,16 @@ export const deleteBem = async (req: Request, res: Response) => {
     res.status(204).send();
   } catch (error) {
     res.status(500).json({ message: 'Erro ao deletar bem. Pode estar em uso num termo de cautela ou movimentação.' });
+  }
+};
+
+
+
+const decodificarTexto = (buf: Buffer): string => {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    return new TextDecoder('windows-1252').decode(buf);
   }
 };
 
@@ -143,7 +158,12 @@ export const importarDadosSipac = async (req: Request, res: Response) => {
         } catch (err) { erros++; }
       }
     } else {
-      const workbook = xlsx.readFile(filePath);
+      // CSV: lido como texto para (1) detectar a codificação — UTF-8 ou Windows-1252, que é o
+      // que o Excel antigo grava — e não quebrar acentos dos cabeçalhos ("Denominação"), e
+      // (2) manter os valores como texto (raw), preservando zeros à esquerda do tombamento.
+      const workbook = filePath.toLowerCase().endsWith('.csv')
+        ? xlsx.read(decodificarTexto(fs.readFileSync(filePath)), { type: 'string', raw: true })
+        : xlsx.readFile(filePath);
       const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
       const rawData = xlsx.utils.sheet_to_json(sheet, { defval: "" });
@@ -195,6 +215,8 @@ export const importarDadosSipac = async (req: Request, res: Response) => {
     res.status(500).json({ message: `Erro ao processar arquivo: ${error.message || 'Falha desconhecida.'}` });
   }
 };
+
+
 
 // VISUALIZAÇÃO 
 
@@ -252,6 +274,9 @@ export const getAllBens = async (req: Request, res: Response) => {
   }
 };
 
+
+
+
 export const transferirBens = async (req: Request, res: Response) => {
   try {
     const { bem_ids, origem_unidade_id, destino_unidade_id, observacao } = transferenciaSchema.parse(req.body);
@@ -275,6 +300,8 @@ export const transferirBens = async (req: Request, res: Response) => {
   }
 };
 
+
+
 export const uploadFoto = async (req: Request, res: Response) => {
   const { id } = req.params;
   if (!req.file) return res.status(400).json({ message: 'Nenhum arquivo enviado.' });
@@ -287,7 +314,9 @@ export const uploadFoto = async (req: Request, res: Response) => {
   }
 };
 
-// 🚀 REGRA INVENTÁRIO #1: Atribuição de Bens gravando no HistoricoPatrimonio
+
+
+//  REGRA INVENTÁRIO #1: Atribuição de Bens gravando no HistoricoPatrimonio
 export const atribuirBem = async (req: Request, res: Response) => {
   const { bem_id, tecnico_id, observacoes } = req.body;
   const usuarioLogadoId = (req as any).user?.id || 1; // Fallback de segurança
@@ -334,7 +363,9 @@ export const atribuirBem = async (req: Request, res: Response) => {
   }
 };
 
-// 🚀 REGRA INVENTÁRIO #1: Devolução gravando no HistoricoPatrimonio
+
+
+//  REGRA INVENTÁRIO #1: Devolução gravando no HistoricoPatrimonio
 export const devolverBem = async (req: Request, res: Response) => {
   const { bem_id } = req.body;
   const usuarioLogadoId = (req as any).user?.id || 1;
@@ -386,7 +417,9 @@ export const devolverBem = async (req: Request, res: Response) => {
   }
 };
 
-// 🚀 REGRA INVENTÁRIO #2: Transferência Direta entre Técnicos
+
+
+//  REGRA INVENTÁRIO #2: Transferência Direta entre Técnicos
 export const transferirEntreTecnicos = async (req: Request, res: Response) => {
   const { bem_id, tecnico_destino_id, observacoes } = req.body;
   const usuarioLogadoId = (req as any).user?.id || 1;
@@ -458,7 +491,8 @@ export const transferirEntreTecnicos = async (req: Request, res: Response) => {
   }
 };
 
-// 🚀 REGRA INVENTÁRIO #1: Buscando da nova tabela de Auditoria
+
+//  REGRA INVENTÁRIO #1: Buscando da nova tabela de Auditoria
 export const getHistoricoBem = async (req: Request, res: Response) => {
   const { id } = req.params;
 
@@ -467,7 +501,9 @@ export const getHistoricoBem = async (req: Request, res: Response) => {
       where: { bem_id: Number(id) },
       include: {
         usuario_acao: { select: { nome_completo: true } },
-        tecnico_alvo: { select: { nome_completo: true } }
+        tecnico_alvo: { select: { nome_completo: true } },
+        unidade_origem: { select: { nome: true } },
+        unidade_destino: { select: { nome: true } }
       },
       orderBy: { data_registro: 'desc' }
     });
@@ -477,6 +513,8 @@ export const getHistoricoBem = async (req: Request, res: Response) => {
     res.status(500).json({ message: 'Erro ao buscar o histórico oficial do equipamento.' });
   }
 };
+
+
 
 export const iniciarLevantamento = async (req: Request, res: Response) => {
   try {
@@ -497,6 +535,8 @@ export const iniciarLevantamento = async (req: Request, res: Response) => {
     res.status(500).json({ message: 'Erro ao iniciar o levantamento.' });
   }
 };
+
+
 
 export const getLevantamentoAtual = async (req: Request, res: Response) => {
   const { unidade_id } = req.query;
@@ -535,6 +575,8 @@ export const getLevantamentoAtual = async (req: Request, res: Response) => {
     res.status(500).json({ message: 'Erro ao buscar dados do levantamento.' });
   }
 };
+
+
 
 export const biparItemLevantamento = async (req: Request, res: Response) => {
   const { tombamento, unidade_id } = req.body;
@@ -575,6 +617,7 @@ export const biparItemLevantamento = async (req: Request, res: Response) => {
   }
 };
 
+
 export const finalizarLevantamento = async (req: Request, res: Response) => {
   try {
     const levantamento = await prisma.levantamentoPatrimonial.findFirst({ where: { status: 'Aberto' } });
@@ -590,6 +633,9 @@ export const finalizarLevantamento = async (req: Request, res: Response) => {
     res.status(500).json({ message: 'Erro ao finalizar levantamento.' });
   }
 };
+
+
+
 export const registrarConferencia = async (req: Request, res: Response) => {
     const { levantamento_id, bem_id, status_conferido, justificativa } = req.body;
     try {

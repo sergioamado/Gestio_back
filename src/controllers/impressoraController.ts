@@ -54,23 +54,40 @@ const atendimentoUpdateSchema = z.object({
 export const getAllImpressoras = async (req: Request, res: Response) => {
     const { ip, numero_serie, unidade_id_filtro, politicas_aplicadas } = req.query;
     const where: Prisma.ImpressoraWhereInput = { ativo: true };
-    if (req.user?.role !== 'admin') {
+    
+    
+    const isTecnicoGlobal = req.user?.role === 'admin' || req.user?.role === 'gerente' ||req.user?.role === 'tecnico_impressora';
+
+    if (!isTecnicoGlobal) {
         if (req.user?.unidade_id) {
-            where.unidade_id = req.user.unidade_id;
+            // Um gerente de RH só vê as impressoras do RH.
+            where.unidade_id = req.user.unidade_id; 
         } else {
             return res.json([]);
         }
     }
+
+    // Filtros manuais da busca
     if (ip) where.ip = { contains: String(ip), mode: 'insensitive' };
     if (numero_serie) where.numero_serie = { contains: String(numero_serie), mode: 'insensitive' };
-    if (unidade_id_filtro && req.user?.role === 'admin') where.unidade_id = Number(unidade_id_filtro);
-    if (politicas_aplicadas === 'true' || politicas_aplicadas === 'false') where.politicas_aplicadas = politicas_aplicadas === 'true';
+    
+    // Se o técnico/admin usar a caixa de filtro na tela para buscar uma unidade específica
+    if (unidade_id_filtro && isTecnicoGlobal) {
+        where.unidade_id = Number(unidade_id_filtro);
+    }
+    
+    if (politicas_aplicadas === 'true' || politicas_aplicadas === 'false') {
+        where.politicas_aplicadas = politicas_aplicadas === 'true';
+    }
     
     const impressoras = await prisma.impressora.findMany({ 
         where, 
-        include: { unidades_organizacionais: { select: { nome: true } } },
+        include: { 
+            unidades_organizacionais: { select: { nome: true, sigla: true } } //Puxa o nome da Unidade!
+        },
         orderBy: { nome: 'asc' }
     });
+    
     res.json(impressoras);
 };
 
@@ -347,13 +364,20 @@ export const reportarErroEstoque = async (req: Request, res: Response) => {
 };
 
 // ATENDIMENTOS (ORDENS DE SERVIÇO DE IMPRESSORAS)
-
 export const getAtendimentos = async (req: Request, res: Response) => {
     try {
-        //  Buscar sem falhar na relação do nome
+        //  Buscar a impressora E a unidade a qual ela pertence
         const atendimentos = await prisma.atendimentoImpressora.findMany({ 
             include: { 
-                impressora: { select: { nome: true, modelo: true, localizacao: true } }, 
+                impressora: { 
+                   select: { 
+                       nome: true, 
+                       modelo: true, 
+                       localizacao: true,
+                       //  Puxamos a unidade Dona da impressora!
+                       unidades_organizacionais: { select: { nome: true, sigla: true } } 
+                   } 
+                }, 
             },
             orderBy: { data: 'desc' }
         });
@@ -365,12 +389,13 @@ export const getAtendimentos = async (req: Request, res: Response) => {
             select: { id: true, nome_completo: true }
         });
 
-        //  Mesclar os dados e enviar a estrutura exata que o Frontend  espera
         const atendimentosFormatados = atendimentos.map(atendimento => {
             const tecnicoReal = tecnicos.find(t => t.id === atendimento.tecnico_id);
             return {
                 ...atendimento,
-                tecnico: tecnicoReal ? { nome_completo: tecnicoReal.nome_completo } : { nome_completo: 'Técnico Desconhecido' }
+                tecnico: tecnicoReal ? { nome_completo: tecnicoReal.nome_completo } : { nome_completo: 'Técnico Desconhecido' },
+                //  Sobrescrevemos o localizador para a interface usar o nome da Unidade real
+                unidade_dona: atendimento.impressora.unidades_organizacionais?.nome || 'Unidade não informada'
             };
         });
 
@@ -380,6 +405,7 @@ export const getAtendimentos = async (req: Request, res: Response) => {
         res.status(500).json({ message: "Erro ao buscar atendimentos." });
     }
 };
+
 
 export const createAtendimento = async (req: Request, res: Response) => {
     try {
