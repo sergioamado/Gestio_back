@@ -110,7 +110,8 @@ export const changePassword = async (req: Request, res: Response) => {
 
     const passwordIsValid = await bcrypt.compare(currentPassword, user.hashed_password);
     if (!passwordIsValid) {
-      return res.status(401).json({ message: 'A senha atual está incorreta.' });
+      // 400 (e não 401): 401 significa "sessão inválida" e faz o front deslogar o usuário.
+      return res.status(400).json({ message: 'A senha atual está incorreta.' });
     }
 
     const newHashedPassword = await bcrypt.hash(newPassword, 10);

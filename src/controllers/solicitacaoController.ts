@@ -15,7 +15,7 @@ const solicitacaoSchema = z.object({
   numero_glpi: z.number().int("O número do GLPI deve ser um número inteiro."),
   setor_equipamento: z.string().optional().nullable(),
   patrimonio: z.string().optional().nullable(),
-  unidade_id: z.number().int(),
+  unidade_id: z.number().int().optional(), // ignorado: a unidade vem do token de quem abre
   tipo_requisicao: z.enum(['PEDIDO', 'TESTE']).default('PEDIDO'),
   justificativa: z.string().optional().nullable(),
   itens: z.array(z.object({
@@ -37,7 +37,8 @@ export const getAllSolicitacoes = async (req: Request, res: Response) => {
         where.status = String(status);
       }
     }
-    if (tecnico_id_filtro) where.responsavel_usuario_id = Number(tecnico_id_filtro);
+    // Filtro por técnico: OS que ele abriu ou em que é o responsável
+    if (tecnico_id_filtro) where.OR = [{ responsavel_usuario_id: Number(tecnico_id_filtro) }, { usuario_id: Number(tecnico_id_filtro) }];
     if (numero_glpi){ 
       const glpiNumero = Number(numero_glpi);
    if (!isNaN(glpiNumero)) {
@@ -89,6 +90,11 @@ export const createSolicitacao = async (req: Request, res: Response) => {
     const validatedData = solicitacaoSchema.parse(req.body);
     const { itens, justificativa, ...solicitacaoData } = validatedData;
     const usuario_id = req.user!.id; 
+    // A OS é sempre da unidade de quem abre (vem do token, não do navegador).
+    const unidadeDoTecnico = req.user!.unidade_id;
+    if (!unidadeDoTecnico) {
+      return res.status(400).json({ message: 'Seu usuário não está vinculado a uma unidade. Peça ao administrador para vincular antes de abrir OS.' });
+    }
 
     const novaSolicitacao = await prisma.$transaction(async (tx) => {
       const solicitacao = await tx.solicitacoes.create({
@@ -97,7 +103,7 @@ export const createSolicitacao = async (req: Request, res: Response) => {
            numero_glpi: validatedData.numero_glpi, 
            setor_equipamento: validatedData.setor_equipamento,
            patrimonio: validatedData.patrimonio,
-           unidade_id: validatedData.unidade_id,
+           unidade_id: unidadeDoTecnico,
            tipo_requisicao: validatedData.tipo_requisicao,
            usuario_id: usuario_id,
            justificativa: validatedData.justificativa,
@@ -141,6 +147,25 @@ export const createSolicitacao = async (req: Request, res: Response) => {
       mensagem: `Sua solicitação GLPI ${validatedData.numero_glpi} foi gerada (Status: PENDENTE).`,
       tipo: 'sucesso', link_acao: '/gerenciar-solicitacoes'
     });
+
+    // Avisa quem precisa agir: os gerentes da unidade (para iniciar o atendimento e separar as peças)
+    // e o técnico responsável pela máquina, quando não foi ele quem abriu a OS.
+    const autor = await prisma.usuarios.findUnique({ where: { id: usuario_id }, select: { nome_completo: true } });
+    const qtdPecas = itens.length;
+    await notificarGerentesDaUnidade(
+      novaSolicitacao.unidade_id,
+      usuario_id,
+      '📦 Nova Ordem de Serviço',
+      `${autor?.nome_completo ?? 'Um técnico'} abriu a OS (GLPI: ${validatedData.numero_glpi}) com ${qtdPecas} peça(s). Aguardando atendimento.`,
+    );
+    if (novaSolicitacao.responsavel_usuario_id && novaSolicitacao.responsavel_usuario_id !== usuario_id) {
+      await dispararNotificacao({
+        usuario_id: novaSolicitacao.responsavel_usuario_id,
+        titulo: '📦 OS atribuída a você',
+        mensagem: `${autor?.nome_completo ?? 'Um técnico'} abriu a OS (GLPI: ${validatedData.numero_glpi}) com você como responsável.`,
+        tipo: 'info', link_acao: '/gerenciar-solicitacoes'
+      });
+    }
     res.status(201).json(novaSolicitacao);
   } catch (error: any) {
     res.status(400).json({ message: error.message || 'Erro ao criar OS.' });
@@ -184,23 +209,39 @@ class RegraNegocioError extends Error {
   }
 }
 
+/** Os técnicos envolvidos na OS: quem abriu e o responsável (sem repetir). */
+const tecnicosDaOS = (os: { usuario_id: number; responsavel_usuario_id: number }) =>
+  Array.from(new Set([os.usuario_id, os.responsavel_usuario_id].filter((id): id is number => !!id)));
+
+/** Notifica os técnicos da OS (quem abriu e o responsável), menos quem fez a ação. */
+const notificarTecnicosDaOS = async (
+  os: { usuario_id: number; responsavel_usuario_id: number },
+  excetoId: number,
+  dados: { titulo: string; mensagem: string; tipo: string },
+) => {
+  for (const id of tecnicosDaOS(os)) {
+    if (id === excetoId) continue;
+    await dispararNotificacao({ usuario_id: id, ...dados, link_acao: '/gerenciar-solicitacoes' });
+  }
+};
+
 /**
  * Verifica se o usuário pode agir nesta OS:
  * - admin: só visualiza;
  * - gerente: só OS da própria unidade;
- * - técnico: só OS que ele abriu.
+ * - técnico: só OS que ele abriu OU em que é o técnico responsável (os dois podem agir).
  */
 const verificarPermissaoNaOS = (
   user: { id: number; role: string; unidade_id: number | null },
-  os: { usuario_id: number; unidade_id: number },
+  os: { usuario_id: number; responsavel_usuario_id: number; unidade_id: number },
 ): Ator => {
   const ator = papelDoAtor(user.role);
   if (ator === 'admin') throw new RegraNegocioError(403, 'O administrador tem acesso somente de visualização às Ordens de Serviço.');
   if (ator === 'gerente' && os.unidade_id !== user.unidade_id) {
     throw new RegraNegocioError(403, 'Você só pode gerir Ordens de Serviço da sua unidade.');
   }
-  if (ator === 'tecnico' && os.usuario_id !== user.id) {
-    throw new RegraNegocioError(403, 'Você só pode agir nas Ordens de Serviço que abriu.');
+  if (ator === 'tecnico' && !tecnicosDaOS(os).includes(user.id)) {
+    throw new RegraNegocioError(403, 'Você só pode agir nas Ordens de Serviço que abriu ou em que é o técnico responsável.');
   }
   if (ator === 'outro') throw new RegraNegocioError(403, 'Acesso negado.');
   return ator;
@@ -391,13 +432,12 @@ export const updateSolicitacao = async (req: Request, res: Response) => {
       if (mudouStatus) partes.push(`Status da OS: *${body.status}*.`);
       if (pecasDevolvidas) partes.push(`${pecasDevolvidas} peça(s) devolvida(s) ao estoque.`);
       for (const m of mudancasItens) partes.push(`Peça *${m.item.itens?.descricao}*: ${m.statusFinal}.`);
-      if (partes.length && solicitacaoAtual.usuario_id !== user.id) {
-        await dispararNotificacao({
-          usuario_id: solicitacaoAtual.usuario_id,
+      if (partes.length) {
+        // Quem abriu e o técnico responsável (os dois podem agir na OS)
+        await notificarTecnicosDaOS(solicitacaoAtual, user.id, {
           titulo: '🔄 Atualização na sua OS',
           mensagem: `OS (GLPI: ${glpi})\n${partes.join('\n')}`,
           tipo: body.status === OS.CANCELADA ? 'alerta' : 'info',
-          link_acao: '/gerenciar-solicitacoes',
         });
       }
     } else {
@@ -411,7 +451,10 @@ export const updateSolicitacao = async (req: Request, res: Response) => {
         );
       }
       if (partes.length) {
-        await notificarGerentesDaUnidade(solicitacaoAtual.unidade_id, user.id, '🧑‍🔧 Ação do técnico na OS', `OS (GLPI: ${glpi})\n${partes.join('\n')}`);
+        const mensagem = `OS (GLPI: ${glpi})\n${partes.join('\n')}`;
+        await notificarGerentesDaUnidade(solicitacaoAtual.unidade_id, user.id, '🧑‍🔧 Ação do técnico na OS', mensagem);
+        // E o outro técnico da OS (se quem abriu e o responsável forem pessoas diferentes)
+        await notificarTecnicosDaOS(solicitacaoAtual, user.id, { titulo: '🧑‍🔧 Ação na sua OS', mensagem, tipo: 'info' });
       }
     }
 
@@ -461,7 +504,8 @@ export const getLatestSolicitacoes = async (req: Request, res: Response) => {
         if (role === 'gerente') {
             whereClause = { unidade_id: unidade_id ?? undefined, status: 'PENDENTE' };
         } else if (role.startsWith('tecnico')) {
-            whereClause = { responsavel_usuario_id: userId };
+            // Técnico: as OS que abriu ou em que é o responsável
+            whereClause = { OR: [{ responsavel_usuario_id: userId }, { usuario_id: userId }] };
         }
 
         const solicitacoes = await prisma.solicitacoes.findMany({
@@ -551,6 +595,11 @@ export const converterTesteEmConsumo = async (req: Request, res: Response) => {
       '🔄 Peça de Consumo Solicitada',
       `O técnico confirmou o teste da peça ${itemAtual.itens.descricao} na OS ${itemAtual.solicitacoes.numero_glpi}. A peça de teste será devolvida e a definitiva precisa ser separada.`,
     );
+    await notificarTecnicosDaOS(itemAtual.solicitacoes, user.id, {
+      titulo: '🔄 Peça de Consumo Solicitada',
+      mensagem: `A peça de teste ${itemAtual.itens.descricao} funcionou na OS ${itemAtual.solicitacoes.numero_glpi}. A definitiva foi pedida ao almoxarifado.`,
+      tipo: 'info',
+    });
     return res.status(200).json({ message: "Conversão realizada com sucesso!", data: resultado });
   } catch (error: any) {
     if (error instanceof RegraNegocioError) return res.status(error.status).json({ message: error.message });

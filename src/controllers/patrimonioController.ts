@@ -9,10 +9,40 @@ import { dispararNotificacao } from './notificacaoController';
 
 const prisma = new PrismaClient();
 
+// ---------------------------------------------------------------------------
+// REGRAS DE UNIDADE DO PATRIMÔNIO
+//  - admin: vê e mexe em todas as unidades (por isso não tem unidade);
+//  - gerente: vê e mexe só nos bens da PRÓPRIA unidade. Transfere bens da unidade dele
+//    para outra (o bem sai da lista dele) e atribui bens aos técnicos da unidade dele
+//    (o bem continua na unidade, mostrando com quem está).
+// ---------------------------------------------------------------------------
+class RegraPatrimonioError extends Error {
+  constructor(public status: number, message: string) { super(message); }
+}
+/** Unidade a que o usuário está preso (gerente) ou null (admin: todas). */
+const unidadeDoGestor = (req: Request): number | null => {
+  const u = req.user!;
+  if (u.role === 'admin') return null;
+  if (!u.unidade_id) throw new RegraPatrimonioError(403, 'Seu usuário não está vinculado a uma unidade.');
+  return u.unidade_id;
+};
+const exigirBemDaMinhaUnidade = (req: Request, bem: { unidade_id: number }) => {
+  const minha = unidadeDoGestor(req);
+  if (minha !== null && bem.unidade_id !== minha) {
+    throw new RegraPatrimonioError(403, 'Este bem não pertence à sua unidade.');
+  }
+};
+const responderErro = (res: Response, error: unknown, padrao: string, status = 500) => {
+  if (error instanceof RegraPatrimonioError) return res.status(error.status).json({ message: error.message });
+  if (error instanceof z.ZodError) return res.status(400).json({ message: 'Dados inválidos.', details: error.issues });
+  console.error(padrao, error);
+  return res.status(status).json({ message: padrao });
+};
+
 // Schemas de Validação (Zod)
 const transferenciaSchema = z.object({
-  bem_ids: z.array(z.number().int()),
-  origem_unidade_id: z.number().int(),
+  bem_ids: z.array(z.number().int()).min(1, 'Escolha pelo menos um bem.'),
+  origem_unidade_id: z.number().int().optional(), // ignorado: a origem é a unidade atual de cada bem
   destino_unidade_id: z.number().int(),
   observacao: z.string().optional(),
 });
@@ -32,7 +62,9 @@ const bemPatrimonialSchema = z.object({
 export const createBem = async (req: Request, res: Response) => {
   try {
     const data = bemPatrimonialSchema.parse(req.body);
-    
+    // Gerente só cadastra bens na própria unidade
+    const minha = unidadeDoGestor(req);
+    if (minha !== null) data.unidade_id = minha;
     const existente = await prisma.bemPatrimonial.findUnique({
       where: { tombamento: data.tombamento }
     });
@@ -44,7 +76,7 @@ export const createBem = async (req: Request, res: Response) => {
     const novoBem = await prisma.bemPatrimonial.create({ data });
     res.status(201).json({ message: 'Bem registrado com sucesso!', data: novoBem });
   } catch (error) {
-    res.status(400).json({ message: 'Dados inválidos.', details: error });
+    responderErro(res, error, 'Dados inválidos.', 400);
   }
 };
 
@@ -54,13 +86,18 @@ export const updateBem = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
     const data = bemPatrimonialSchema.parse(req.body);
+    const atual = await prisma.bemPatrimonial.findUnique({ where: { id: Number(id) } });
+    if (!atual) return res.status(404).json({ message: 'Bem não encontrado.' });
+    exigirBemDaMinhaUnidade(req, atual);
+    // Mudar de unidade é TRANSFERÊNCIA (fica no histórico e avisa o destino), não edição.
+    if (unidadeDoGestor(req) !== null) data.unidade_id = atual.unidade_id;
     const updatedBem = await prisma.bemPatrimonial.update({
       where: { id: Number(id) },
       data
     });
     res.json({ message: 'Bem atualizado com sucesso!', data: updatedBem });
   } catch (error) {
-    res.status(400).json({ message: 'Erro ao atualizar. Verifique os dados.', details: error });
+    responderErro(res, error, 'Erro ao atualizar. Verifique os dados.', 400);
   }
 };
 
@@ -69,12 +106,15 @@ export const updateBem = async (req: Request, res: Response) => {
 export const deleteBem = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
+    const atual = await prisma.bemPatrimonial.findUnique({ where: { id: Number(id) } });
+    if (!atual) return res.status(404).json({ message: 'Bem não encontrado.' });
+    exigirBemDaMinhaUnidade(req, atual);
     await prisma.bemPatrimonial.delete({
       where: { id: Number(id) },
     });
     res.status(204).send();
   } catch (error) {
-    res.status(500).json({ message: 'Erro ao deletar bem. Pode estar em uso num termo de cautela ou movimentação.' });
+    responderErro(res, error, 'Erro ao deletar bem. Pode estar em uso num termo de cautela ou movimentação.');
   }
 };
 
@@ -88,13 +128,44 @@ const decodificarTexto = (buf: Buffer): string => {
   }
 };
 
+// Bem que já existe e veio de novo no arquivo do SIPAC.
+// Se estava em outra unidade, passa para a unidade de quem importou (regra confirmada), e isso
+// fica registrado: histórico "origem ➔ destino (Importação do SIPAC)". Se estava com um técnico
+// da unidade antiga, a atribuição é encerrada (bem e técnico precisam ser da mesma unidade).
+// Retorna a unidade de origem quando o bem mudou de unidade (para avisar os gerentes de lá).
+const atualizarBemImportado = async (
+  bem: { id: number; tombamento: string; unidade_id: number },
+  descricao: string,
+  unidadeDestino: number,
+  usuarioId: number,
+): Promise<number | null> => {
+  const mudouDeUnidade = bem.unidade_id !== unidadeDestino;
+  await prisma.$transaction(async (tx) => {
+    await tx.bemPatrimonial.update({ where: { id: bem.id }, data: { descricao, unidade_id: unidadeDestino } });
+    if (!mudouDeUnidade) return;
+    const aberta = await tx.atribuicaoTecnico.findFirst({ where: { bem_id: bem.id, data_devolucao: null } });
+    if (aberta) {
+      await tx.atribuicaoTecnico.update({ where: { id: aberta.id }, data: { data_devolucao: new Date() } });
+      await tx.historicoPatrimonio.create({
+        data: { bem_id: bem.id, usuario_id: usuarioId, tecnico_id: aberta.tecnico_id, acao: 'Devolução', detalhes: 'Atribuição encerrada: o bem mudou de unidade pela importação do SIPAC.' },
+      });
+    }
+    await tx.historicoPatrimonio.create({
+      data: { bem_id: bem.id, usuario_id: usuarioId, origem_unidade_id: bem.unidade_id, destino_unidade_id: unidadeDestino, acao: 'Transferência', detalhes: 'Importação do SIPAC.' },
+    });
+  });
+  return mudouDeUnidade ? bem.unidade_id : null;
+};
+
 // Importação Massiva via PDF (SIPAC)
 export const importarDadosSipac = async (req: Request, res: Response) => {
   if (!req.file) {
     return res.status(400).json({ message: 'O servidor recusou o arquivo. Verifique se é um PDF ou CSV válido.' });
   }
 
-  const unidadeIdImportacao = req.body.unidade_id ? Number(req.body.unidade_id) : null; 
+  // Gerente importa só para a própria unidade
+  const unidadeGestor = req.user!.role === 'admin' ? null : req.user!.unidade_id;
+  const unidadeIdImportacao = unidadeGestor ?? (req.body.unidade_id ? Number(req.body.unidade_id) : null); 
   if (!unidadeIdImportacao) {
       if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path); 
       return res.status(400).json({ message: 'Para importar os dados, é obrigatório informar a Unidade de destino.' });
@@ -106,6 +177,12 @@ export const importarDadosSipac = async (req: Request, res: Response) => {
   try {
     let novos = 0;
     let atualizados = 0;
+    // bens que vieram de outra unidade: { unidade de origem: [tombamentos] }
+    const movidos = new Map<number, string[]>();
+    const registrarMovido = (origem: number | null, tombamento: string) => {
+      if (origem === null) return;
+      movidos.set(origem, [...(movidos.get(origem) ?? []), tombamento]);
+    };
     let erros = 0;
     let totalEncontrados = 0;
 
@@ -147,7 +224,7 @@ export const importarDadosSipac = async (req: Request, res: Response) => {
         try {
           const bemExistente = await prisma.bemPatrimonial.findUnique({ where: { tombamento } });
           if (bemExistente) {
-            await prisma.bemPatrimonial.update({ where: { tombamento }, data: { descricao, unidade_id: unidadeIdImportacao } });
+            registrarMovido(await atualizarBemImportado(bemExistente, descricao, unidadeIdImportacao, req.user!.id), tombamento);
             atualizados++;
           } else {
             await prisma.bemPatrimonial.create({
@@ -182,7 +259,7 @@ export const importarDadosSipac = async (req: Request, res: Response) => {
         try {
           const bemExistente = await prisma.bemPatrimonial.findUnique({ where: { tombamento } });
           if (bemExistente) {
-            await prisma.bemPatrimonial.update({ where: { tombamento }, data: { descricao, unidade_id: unidadeIdImportacao } });
+            registrarMovido(await atualizarBemImportado(bemExistente, descricao, unidadeIdImportacao, req.user!.id), tombamento);
             atualizados++;
           } else {
             await prisma.bemPatrimonial.create({
@@ -200,12 +277,30 @@ export const importarDadosSipac = async (req: Request, res: Response) => {
        return res.status(400).json({ message: 'Nenhum equipamento foi processado. O arquivo pode estar vazio ou as colunas não foram identificadas.' });
     }
 
-    res.status(200).json({ 
+    // Avisa os gerentes das unidades de onde saíram bens
+    const destinoNome = (await prisma.unidades_organizacionais.findUnique({ where: { id: unidadeIdImportacao }, select: { nome: true } }))?.nome ?? 'outra unidade';
+    for (const [origem, tombamentos] of movidos) {
+      const gerentes = await prisma.usuarios.findMany({ where: { role: 'gerente', unidade_id: origem }, select: { id: true } });
+      for (const g of gerentes) {
+        if (g.id === req.user!.id) continue;
+        await dispararNotificacao({
+          usuario_id: g.id,
+          titulo: '📦 Bens movidos pela importação do SIPAC',
+          mensagem: `${tombamentos.length} bem(ns) da sua unidade constam no SIPAC de ${destinoNome} e foram movidos para lá:\n${tombamentos.slice(0, 20).join(', ')}${tombamentos.length > 20 ? '…' : ''}`,
+          tipo: 'alerta',
+          link_acao: '/lista-bens',
+        });
+      }
+    }
+    const totalMovidos = [...movidos.values()].reduce((n, l) => n + l.length, 0);
+
+    res.status(200).json({
       message: 'Sincronização concluída com sucesso!',
       detalhes: {
         total_bens_encontrados: totalEncontrados,
         novos_registos: novos,
         atualizados: atualizados,
+        vindos_de_outra_unidade: totalMovidos,
         erros: erros
       }
     });
@@ -222,8 +317,10 @@ export const importarDadosSipac = async (req: Request, res: Response) => {
 
 export const getAllBens = async (req: Request, res: Response) => {
   try {
-    const { search, unidade_id, status_atual, page = 1, limit = 10 } = req.query;
+    const { search, unidade_id, status_atual, com_tecnico, page = 1, limit = 10 } = req.query;
     const where: any = {};
+    // Gerente: sempre a própria unidade (o servidor garante, não só a tela)
+    const minha = unidadeDoGestor(req);
 
     if (search) {
       where.OR = [
@@ -231,8 +328,11 @@ export const getAllBens = async (req: Request, res: Response) => {
         { tombamento: { contains: String(search) } }
       ];
     }
-    if (unidade_id) where.unidade_id = Number(unidade_id);
+    if (minha !== null) where.unidade_id = minha;
+    else if (unidade_id) where.unidade_id = Number(unidade_id);
     if (status_atual) where.status_atual = String(status_atual);
+    // "Com técnico": bens atribuídos (termo de cautela aberto)
+    if (com_tecnico === 'sim') where.atribuicoes = { some: { data_devolucao: null } };
 
     const skip = (Number(page) - 1) * Number(limit);
     const take = Number(limit);
@@ -270,7 +370,7 @@ export const getAllBens = async (req: Request, res: Response) => {
       }
     });
   } catch (error) {
-    res.status(500).json({ message: 'Erro ao buscar bens patrimoniais.' });
+    responderErro(res, error, 'Erro ao buscar bens patrimoniais.');
   }
 };
 
@@ -279,24 +379,76 @@ export const getAllBens = async (req: Request, res: Response) => {
 
 export const transferirBens = async (req: Request, res: Response) => {
   try {
-    const { bem_ids, origem_unidade_id, destino_unidade_id, observacao } = transferenciaSchema.parse(req.body);
-    const resultado = await prisma.$transaction(async (tx) => {
-      const movimentacoes = await Promise.all(
-        bem_ids.map(bem_id => 
-          tx.movimentacaoBem.create({
-            data: { bem_id, origem_unidade_id, destino_unidade_id, tipo: 'TRANSFERENCIA', subtipo: observacao, data_envio: new Date() }
-          })
-        )
-      );
+    const { bem_ids, destino_unidade_id, observacao } = transferenciaSchema.parse(req.body);
+    const minha = unidadeDoGestor(req);
+
+    const destino = await prisma.unidades_organizacionais.findUnique({ where: { id: destino_unidade_id } });
+    if (!destino) return res.status(400).json({ message: 'Unidade de destino não encontrada.' });
+
+    const bens = await prisma.bemPatrimonial.findMany({
+      where: { id: { in: bem_ids } },
+      include: {
+        unidade: { select: { nome: true } },
+        atribuicoes: { where: { data_devolucao: null }, include: { tecnico: { select: { nome_completo: true } } } },
+      },
+    });
+    if (bens.length !== bem_ids.length) return res.status(404).json({ message: 'Algum dos bens não foi encontrado.' });
+
+    // Gerente transfere só bens da própria unidade
+    if (minha !== null) {
+      const deFora = bens.filter((b) => b.unidade_id !== minha);
+      if (deFora.length) throw new RegraPatrimonioError(403, `Você só pode transferir bens da sua unidade. Fora dela: ${deFora.map((b) => b.tombamento).join(', ')}.`);
+    }
+    const jaNoDestino = bens.filter((b) => b.unidade_id === destino_unidade_id);
+    if (jaNoDestino.length) throw new RegraPatrimonioError(400, `Já estão na unidade de destino: ${jaNoDestino.map((b) => b.tombamento).join(', ')}.`);
+    // Bem com técnico precisa ser devolvido antes (senão o técnico de uma unidade ficaria com bem de outra)
+    const comTecnico = bens.filter((b) => b.atribuicoes.length);
+    if (comTecnico.length) {
+      throw new RegraPatrimonioError(400, `Registre a devolução antes de transferir: ${comTecnico.map((b) => `${b.tombamento} (com ${b.atribuicoes[0].tecnico.nome_completo})`).join(', ')}.`);
+    }
+
+    await prisma.$transaction(async (tx) => {
+      for (const bem of bens) {
+        await tx.movimentacaoBem.create({
+          data: { bem_id: bem.id, origem_unidade_id: bem.unidade_id, destino_unidade_id, tipo: 'TRANSFERENCIA', subtipo: observacao, data_envio: new Date() },
+        });
+        // Histórico oficial do bem (aparece na aba "Histórico")
+        await tx.historicoPatrimonio.create({
+          data: {
+            bem_id: bem.id,
+            usuario_id: req.user!.id,
+            origem_unidade_id: bem.unidade_id,
+            destino_unidade_id,
+            acao: 'Transferência',
+            detalhes: observacao || 'Transferência entre unidades.',
+          },
+        });
+      }
+      // O bem passa a ser da unidade de destino (sai da lista da origem). A situação continua "Ativo".
       await tx.bemPatrimonial.updateMany({
         where: { id: { in: bem_ids } },
-        data: { unidade_id: destino_unidade_id }
+        data: { unidade_id: destino_unidade_id },
       });
-      return movimentacoes;
     });
-    res.status(201).json({ message: 'Movimentação registrada com sucesso.', resultado });
+
+    // Avisa os gerentes da unidade que recebeu
+    const gerentesDestino = await prisma.usuarios.findMany({ where: { role: 'gerente', unidade_id: destino_unidade_id }, select: { id: true } });
+    const origemNome = bens[0].unidade?.nome ?? 'outra unidade';
+    const lista = bens.map((b) => `${b.tombamento} – ${b.descricao}`).join('\n');
+    for (const g of gerentesDestino) {
+      if (g.id === req.user!.id) continue;
+      await dispararNotificacao({
+        usuario_id: g.id,
+        titulo: '📦 Bens recebidos por transferência',
+        mensagem: `${bens.length} bem(ns) transferido(s) de ${origemNome} para a sua unidade:\n${lista}${observacao ? `\n\n📝 ${observacao}` : ''}`,
+        tipo: 'info',
+        link_acao: '/lista-bens',
+      });
+    }
+
+    res.status(201).json({ message: `${bens.length} bem(ns) transferido(s) para ${destino.nome}.` });
   } catch (error: any) {
-    res.status(400).json({ message: error.message || 'Erro ao processar transferência.' });
+    responderErro(res, error, error?.message || 'Erro ao processar transferência.', 400);
   }
 };
 
@@ -305,6 +457,13 @@ export const transferirBens = async (req: Request, res: Response) => {
 export const uploadFoto = async (req: Request, res: Response) => {
   const { id } = req.params;
   if (!req.file) return res.status(400).json({ message: 'Nenhum arquivo enviado.' });
+  try {
+    const atual = await prisma.bemPatrimonial.findUnique({ where: { id: Number(id) } });
+    if (!atual) return res.status(404).json({ message: 'Bem não encontrado.' });
+    exigirBemDaMinhaUnidade(req, atual);
+  } catch (error) {
+    return responderErro(res, error, 'Erro ao salvar a foto.');
+  }
   const caminhoRelativo = req.file.path.replace(/\\/g, '/'); 
   try {
     await prisma.bemPatrimonial.update({ where: { id: Number(id) }, data: { foto_url: caminhoRelativo } });
@@ -325,11 +484,20 @@ export const atribuirBem = async (req: Request, res: Response) => {
     const bem = await prisma.bemPatrimonial.findUnique({ where: { id: Number(bem_id) } });
     if (!bem) return res.status(404).json({ message: 'Bem não encontrado.' });
 
+    exigirBemDaMinhaUnidade(req, bem);
+
+    const tecnico = await prisma.usuarios.findUnique({ where: { id: Number(tecnico_id) }, select: { id: true, nome_completo: true, unidade_id: true } });
+    if (!tecnico) return res.status(404).json({ message: 'Técnico não encontrado.' });
+    // O técnico tem que ser da unidade dona do bem (o bem continua na unidade, com ele)
+    if (tecnico.unidade_id !== bem.unidade_id) {
+      throw new RegraPatrimonioError(400, `${tecnico.nome_completo} não é da unidade deste bem. Atribua a um técnico da mesma unidade.`);
+    }
+    const jaAtribuido = await prisma.atribuicaoTecnico.findFirst({ where: { bem_id: bem.id, data_devolucao: null }, include: { tecnico: { select: { nome_completo: true } } } });
+    if (jaAtribuido) throw new RegraPatrimonioError(400, `Este bem já está com ${jaAtribuido.tecnico.nome_completo}. Registre a devolução antes.`);
+
     const atribuicao = await prisma.$transaction(async (tx) => {
-      await tx.bemPatrimonial.update({
-        where: { id: Number(bem_id) },
-        data: { status_atual: 'Transferido' }
-      });
+      // A situação do bem NÃO muda: ele continua "Ativo" na unidade, só passa a estar com o técnico.
+      // (Antes ficava "Transferido", parecia ter saído da unidade e sumia da Auditoria Física.)
 
       const novaAtribuicao = await tx.atribuicaoTecnico.create({
         data: { bem_id: Number(bem_id), tecnico_id: Number(tecnico_id), observacoes }
@@ -359,7 +527,7 @@ export const atribuirBem = async (req: Request, res: Response) => {
 
     res.status(201).json({ message: 'Bem atribuído com sucesso!', data: atribuicao });
   } catch (error) {
-    res.status(500).json({ message: 'Erro ao atribuir bem.' });
+    responderErro(res, error, 'Erro ao atribuir bem.');
   }
 };
 
@@ -374,6 +542,8 @@ export const devolverBem = async (req: Request, res: Response) => {
     const bem = await prisma.bemPatrimonial.findUnique({ where: { id: Number(bem_id) } });
     if (!bem) return res.status(404).json({ message: 'Bem não encontrado.' });
 
+    exigirBemDaMinhaUnidade(req, bem);
+
     const atribuicaoAberta = await prisma.atribuicaoTecnico.findFirst({
       where: { bem_id: Number(bem_id), data_devolucao: null }
     });
@@ -386,10 +556,7 @@ export const devolverBem = async (req: Request, res: Response) => {
         data: { data_devolucao: new Date() }
       });
 
-      await tx.bemPatrimonial.update({
-        where: { id: Number(bem_id) },
-        data: { status_atual: 'Ativo' }
-      });
+      // A situação do bem não muda na devolução (continua "Ativo" na unidade).
 
       // Gravação na tabela oficial de Histórico
       await tx.historicoPatrimonio.create({
@@ -413,7 +580,7 @@ export const devolverBem = async (req: Request, res: Response) => {
 
     res.json({ message: 'Bem devolvido com sucesso!' });
   } catch (error) {
-    res.status(500).json({ message: 'Erro ao devolver bem.' });
+    responderErro(res, error, 'Erro ao devolver bem.');
   }
 };
 
@@ -549,8 +716,10 @@ export const getLevantamentoAtual = async (req: Request, res: Response) => {
 
     if (!levantamento) return res.json(null);
 
+    // Sem unidade_id = todas as unidades (admin acompanhando o levantamento geral)
+    const unidadeFiltro = unidade_id ? Number(unidade_id) : undefined;
     const bensDaUnidade = await prisma.bemPatrimonial.findMany({
-      where: { unidade_id: Number(unidade_id), status_atual: 'Ativo' },
+      where: { ...(unidadeFiltro ? { unidade_id: unidadeFiltro } : {}), status_atual: 'Ativo' },
       include: {
         atribuicoes: { where: { data_devolucao: null }, include: { tecnico: true } }
       }

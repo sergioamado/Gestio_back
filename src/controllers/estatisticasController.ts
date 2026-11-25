@@ -16,7 +16,8 @@ export const getDashboardStats = async (req: Request, res: Response) => {
         whereOS = { unidade_id };
         whereEstoque = { unidade_id };
     } else if (role.startsWith('tecnico')) {
-        whereOS = { responsavel_usuario_id: userId }; // Técnico só vê as próprias OS
+        // Técnico: as OS que abriu ou em que é o responsável (os dois podem agir)
+        whereOS = { OR: [{ responsavel_usuario_id: userId }, { usuario_id: userId }] };
         if (unidade_id) whereEstoque = { unidade_id }; // Mas vê o estoque da unidade toda
     }
 
