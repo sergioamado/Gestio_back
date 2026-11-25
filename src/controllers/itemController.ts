@@ -2,7 +2,6 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
-import { getIO } from '../socket';
 
 const prisma = new PrismaClient();
 
@@ -83,7 +82,6 @@ export const createItem = async (req: Request, res: Response) => {
       quantidade: data.quantidade_estoque || 0
     };
     const newItem = await prisma.itens.create({ data: payload as any }); 
-    try { getIO().emit('atualizar_estoque'); } catch(e) {}    
     return res.status(201).json(newItem);
   } catch (error: any) { 
     // CORREÇÃO DA MENSAGEM UNDEFINED
@@ -115,7 +113,6 @@ export const updateItem = async (req: Request, res: Response) => {
     });
     
     // 4. Avisar o rádio para atualizar a tela de todos
-    try { getIO().emit('atualizar_estoque'); } catch(e) {}    
     
     return res.json(updatedItem);
   } catch (error: any) { 
@@ -131,7 +128,6 @@ export const deleteItem = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
     await prisma.itens.delete({ where: { id: Number(id) } });
-    try { getIO().emit('atualizar_estoque'); } catch(e) {}
     return res.status(204).send();
   } catch (error) {
     res.status(500).json({ message: 'Erro ao deletar item. Pode estar em uso.' });

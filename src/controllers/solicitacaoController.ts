@@ -3,7 +3,6 @@ import { Request, Response } from 'express';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { dispararNotificacao } from './notificacaoController';
-import { getIO } from '../socket';
 import {
   ITEM, OS, efeitoCancelamento, osEncerrada, papelDoAtor, podeConverterTeste, podeMudarStatusOS, transicaoItem,
   type Ator, type EfeitoEstoque,
@@ -142,7 +141,6 @@ export const createSolicitacao = async (req: Request, res: Response) => {
       mensagem: `Sua solicitação GLPI ${validatedData.numero_glpi} foi gerada (Status: PENDENTE).`,
       tipo: 'sucesso', link_acao: '/gerenciar-solicitacoes'
     });
-    try { getIO().emit('atualizar_estoque'); } catch(e) {}
     res.status(201).json(novaSolicitacao);
   } catch (error: any) {
     res.status(400).json({ message: error.message || 'Erro ao criar OS.' });
@@ -417,8 +415,6 @@ export const updateSolicitacao = async (req: Request, res: Response) => {
       }
     }
 
-    try { getIO().emit('atualizar_tabelas_os'); } catch (e) {}
-    try { getIO().emit('atualizar_estoque'); } catch (e) {}
     res.status(200).json(resultado);
   } catch (error) {
     if (error instanceof RegraNegocioError) return res.status(error.status).json({ message: error.message });
@@ -555,8 +551,6 @@ export const converterTesteEmConsumo = async (req: Request, res: Response) => {
       '🔄 Peça de Consumo Solicitada',
       `O técnico confirmou o teste da peça ${itemAtual.itens.descricao} na OS ${itemAtual.solicitacoes.numero_glpi}. A peça de teste será devolvida e a definitiva precisa ser separada.`,
     );
-    try { getIO().emit('atualizar_tabelas_os'); } catch (e) {}
-    try { getIO().emit('atualizar_estoque'); } catch (e) {}
     return res.status(200).json({ message: "Conversão realizada com sucesso!", data: resultado });
   } catch (error: any) {
     if (error instanceof RegraNegocioError) return res.status(error.status).json({ message: error.message });

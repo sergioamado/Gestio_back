@@ -3,7 +3,6 @@ import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import { dispararNotificacao } from './notificacaoController';
-import { getIO } from '../socket';
 
 const prisma = new PrismaClient();
 
@@ -46,7 +45,6 @@ export const createManutencao = async (req: Request, res: Response) => {
       });
     }
 
-    try { getIO().emit('atualizar_manutencao'); } catch(e) { console.error(e); }
     
     return res.status(201).json(novaManutencao);
 
@@ -114,7 +112,6 @@ export const updateStatusManutencao = async (req: Request, res: Response) => {
           link_acao: '/fila-manutencao-eletronica'
         });
     }
-    try { getIO().emit('atualizar_manutencao'); } catch(e) { console.error(e); }
     
     return res.status(201).json(manutencao);
 
@@ -149,7 +146,6 @@ export const iniciarManutencao = async (req: Request, res: Response) => {
           link_acao: '/fila-manutencao-eletronica'
         });
     }
-    try { getIO().emit('atualizar_manutencao'); } catch(e) { console.error(e); }
     
     return res.status(201).json(manutencao);
 
@@ -200,7 +196,6 @@ export const finalizarManutencao = async (req: Request, res: Response) => {
           link_acao: '/fila-manutencao-eletronica'
         });
     }
-    try { getIO().emit('atualizar_manutencao'); } catch(e) { console.error(e); }
     
     return res.status(201).json(manutencao);
 
@@ -252,7 +247,6 @@ export const editarManutencao = async (req: Request, res: Response) => {
         link_acao: '/fila-manutencao-eletronica'
       });
     }
-    try { getIO().emit('atualizar_manutencao'); } catch(e) { console.error(e); }
     
     return res.status(201).json(manutencao);
 

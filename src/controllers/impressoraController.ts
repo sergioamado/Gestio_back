@@ -2,7 +2,6 @@
 import { Request, Response } from 'express';
 import { Prisma, PrismaClient, StatusAtendimento } from '@prisma/client';
 import { z } from 'zod';
-import { getIO } from '../socket';
 
 const prisma = new PrismaClient();
 
@@ -95,7 +94,6 @@ export const createImpressora = async (req: Request, res: Response) => {
     try {
         const data = impressoraCreateSchema.parse(req.body);
         const novaImpressora = await prisma.impressora.create({ data });
-        try { getIO().emit('nova_impressora'); } catch(e) { console.error(e); }
         return res.status(201).json(novaImpressora);
     } catch (error) {
         res.status(400).json({ message: 'Erro ao criar impressora.', details: error });
@@ -110,7 +108,6 @@ export const updateImpressora = async (req: Request, res: Response) => {
             where: { id: Number(id) },
             data: dataToUpdate,
         });
-        try { getIO().emit('atualizar_impressora'); } catch(e) { console.error(e); }
     return res.json(impressoraAtualizada);
     } catch (error) {
         console.error("Erro ao atualizar impressora:", error);
@@ -125,7 +122,6 @@ export const deleteImpressora = async (req: Request, res: Response) => {
             where: { id: Number(id) },
             data: { ativo: false },
         });
-        try { getIO().emit('impressora_deletada'); } catch(e) { console.error(e); }
         return res.status(204).send();
     } catch (error) {
         res.status(500).json({ message: 'Erro ao excluir impressora.' });
@@ -145,7 +141,6 @@ export const getControleSuprimentos = async (req: Request, res: Response) => {
             },
             orderBy: { data: 'desc' }
         });
-        try { getIO().emit('novo_registro'); } catch(e) { console.error(e); }
         return res.status(201).json(registros);
     } catch (error) {
         res.status(500).json({ message: 'Erro ao buscar histórico de suprimentos.' });
@@ -192,7 +187,6 @@ export const createControleSuprimentos = async (req: Request, res: Response) => 
 
             return novoControle;
         });
-        try { getIO().emit('suplemento_criado'); } catch(e) { console.error(e); }
         return res.status(201).json(resultado);
     } catch (error: any) {
         res.status(400).json({ message: error.message || 'Erro ao registrar a requisição.' });
@@ -212,7 +206,6 @@ export const getEstoqueSuprimentos = async (req: Request, res: Response) => {
             const novoEstoque = await prisma.estoqueSuprimentos.create({ data: { id: 1 }});
             return res.json(novoEstoque);
         }
-        try { getIO().emit('estoque_suprimentos'); } catch(e) { console.error(e); }
         return res.status(201).json(estoque);
     } catch (error) {
         console.error("Erro ao buscar estoque de suprimentos:", error);
@@ -260,7 +253,6 @@ export const addEstoqueSuprimentos = async (req: Request, res: Response) => {
 
             return updated;
         });
-        try { getIO().emit('estoque_atualizado'); } catch(e) { console.error(e); }
         return res.status(201).json(estoqueAtualizado);
     } catch (error) {
         console.error("Erro ao atualizar estoque de suprimentos:", error);
@@ -355,7 +347,6 @@ export const reportarErroEstoque = async (req: Request, res: Response) => {
         mensagem: mensagem
       }
     });
-    try { getIO().emit('reportar_divergencia'); } catch(e) { console.error(e); }
     return res.status(201).json({ message: 'Divergência reportada com sucesso aos gestores.' });
   } catch (error) {
     console.error(error);
@@ -411,7 +402,6 @@ export const createAtendimento = async (req: Request, res: Response) => {
     try {
         const data = atendimentoCreateSchema.parse(req.body);
         const novoAtendimento = await prisma.atendimentoImpressora.create({ data });
-        try { getIO().emit('atendimento_criado'); } catch(e) { console.error(e); }
         return res.status(201).json(novoAtendimento);
     } catch (error) {
         console.error("Erro ao criar atendimento:", error);
@@ -427,7 +417,6 @@ export const updateAtendimento = async (req: Request, res: Response) => {
             where: { id: Number(id) },
             data: dataToUpdate,
         });
-        try { getIO().emit('atendimento_atualizado'); } catch(e) { console.error(e); }
         return res.json(atendimentoAtualizado);
     } catch (error) {
         console.error("Erro ao atualizar atendimento:", error);

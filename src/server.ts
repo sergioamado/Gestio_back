@@ -17,6 +17,7 @@ import analiseRoutes from './routes/analiseRoutes';
 import { initSocket } from './socket';
 import registroProducaoRoutes from './routes/registroProducaoRoutes'; // Importação da rota de registro de produção
 import relatorioAnaliticoRoutes from './routes/relatorioAnaliticoRoutes';
+import { avisarMudancas } from './realtime/avisarMudancas';
 import http from 'http';
 import { authMiddleware, managerOrAdminMiddleware } from './middlewares/authMiddleware';
 
@@ -33,6 +34,8 @@ initSocket(server);
 // Middlewares
 app.use(cors()); 
 app.use(express.json());
+// Depois de cada alteração bem-sucedida, avisa as telas abertas para recarregarem (tempo real).
+app.use(avisarMudancas);
 
 // Rotas da API
 app.use('/api/auth', authRoutes);
