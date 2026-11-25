@@ -16,6 +16,7 @@ import servicosRoutes from './routes/servicosRoutes';
 import analiseRoutes from './routes/analiseRoutes';
 import { initSocket } from './socket';
 import registroProducaoRoutes from './routes/registroProducaoRoutes'; // Importação da rota de registro de produção
+import relatorioAnaliticoRoutes from './routes/relatorioAnaliticoRoutes';
 import http from 'http';
 import { authMiddleware, managerOrAdminMiddleware } from './middlewares/authMiddleware';
 
@@ -48,6 +49,7 @@ app.use('/api/patrimonio', patrimonioRoutes);
 app.use('/api/servicos', servicosRoutes);
 app.use('/api/analise', analiseRoutes);
 app.use('/api/producao', registroProducaoRoutes); 
+app.use('/api/relatorios-analiticos', relatorioAnaliticoRoutes);
 
 
 // Arquivos enviados (fotos de patrimônio): só para usuários logados com acesso ao patrimônio.

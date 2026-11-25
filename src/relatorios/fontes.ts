@@ -610,6 +610,60 @@ export const FONTES: Fonte[] = [
     },
   },
   {
+    id: 'equipamentos_inserviveis',
+    nome: 'Equipamentos Inservíveis (Relatório Analítico)',
+    grupo: 'Patrimônio',
+    descricao: 'Equipamentos declarados sem conserto em Relatórios Analíticos assinados (os anulados não entram).',
+    campoData: 'data',
+    campos: [
+      { key: 'relatorio', label: 'Nº do Relatório', tipo: 'texto' },
+      ...camposData('data', 'Data da Assinatura'),
+      { key: 'equipamento', label: 'Equipamento', tipo: 'texto' },
+      { key: 'patrimonio', label: 'Patrimônio', tipo: 'texto' },
+      { key: 'unidade', label: 'Unidade', tipo: 'texto' },
+      { key: 'tecnico', label: 'Técnico', tipo: 'texto' },
+      { key: 'assinante', label: 'Assinado por', tipo: 'texto' },
+      { key: 'qtd', label: 'Quantidade', tipo: 'numero' },
+    ],
+    buscar: async (ctx) => {
+      const rows = await prisma.relatorioAnaliticoItem.findMany({
+        where: {
+          relatorio: {
+            status: 'ASSINADO',
+            ...siUnidade(ctx),
+            ...(ctx.periodo ? { assinado_em: ctx.periodo } : {}),
+          },
+        },
+        include: {
+          relatorio: {
+            select: {
+              numero: true,
+              ano: true,
+              assinado_em: true,
+              unidade: { select: { nome: true, sigla: true } },
+              tecnico: { select: { nome_completo: true } },
+              assinado_por: { select: { nome_completo: true } },
+            },
+          },
+        },
+        orderBy: [{ relatorio: { assinado_em: 'asc' } }, { ordem: 'asc' }],
+        take: ctx.limite,
+      });
+      return rows.map((i) => ({
+        relatorio: i.relatorio.numero && i.relatorio.ano
+          ? `${String(i.relatorio.numero).padStart(3, '0')}/${i.relatorio.ano}${i.relatorio.unidade?.sigla ? ` - ${i.relatorio.unidade.sigla}` : ''}`
+          : null,
+        ...valoresData('data', i.relatorio.assinado_em),
+        equipamento: i.equipamento,
+        patrimonio: i.patrimonio,
+        unidade: i.relatorio.unidade?.nome ?? null,
+        tecnico: i.relatorio.tecnico?.nome_completo ?? null,
+        assinante: i.relatorio.assinado_por?.nome_completo ?? null,
+        qtd: 1,
+      }));
+    },
+  },
+  {
     id: 'historico_patrimonio',
     nome: 'Movimentações de Patrimônio',
     grupo: 'Patrimônio',

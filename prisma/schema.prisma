@@ -106,6 +106,7 @@ model unidades_organizacionais {
   movimentacoes_destino  MovimentacaoBem[]       @relation("DestinoBem")
   historicos_origem  HistoricoPatrimonio[] @relation("historico_origem")
   historicos_destino HistoricoPatrimonio[] @relation("historico_destino")
+  relatorios_analiticos RelatorioAnalitico[]
 }
 
 model usuarios {
@@ -143,6 +144,9 @@ model usuarios {
   historicoSuprimentos                                       HistoricoSuprimento[]
   reporteErroEstoques                                        ReporteErroEstoque[]
   relatorio_modelos                                          RelatorioModelo[]
+  relatorios_analiticos_emitidos                             RelatorioAnalitico[] @relation("ra_tecnico")
+  relatorios_analiticos_assinados                            RelatorioAnalitico[] @relation("ra_assinante")
+  relatorios_analiticos_anulados                             RelatorioAnalitico[] @relation("ra_anulador")
 }
 
 model manutencao_eletronica {
@@ -489,4 +493,58 @@ model RelatorioModelo {
 
   @@index([usuario_id])
   @@map("relatorio_modelos")
+}
+
+
+// MÓDULO: RELATÓRIO ANALÍTICO (laudo de equipamento sem conserto / inservível)
+// Fluxo: técnico emite (PENDENTE) → gerente da unidade assina (ASSINADO) ou devolve (DEVOLVIDO).
+// Um relatório assinado pode ser ANULADO (o número continua reservado).
+model RelatorioAnalitico {
+  id           Int      @id @default(autoincrement())
+  unidade_id   Int
+  tecnico_id   Int
+  status       String   @default("PENDENTE") @db.VarChar(20) // PENDENTE, DEVOLVIDO, ASSINADO, ANULADO
+  numero       Int?     // sequencial por unidade e ano, atribuído na assinatura
+  ano          Int?
+  criado_em    DateTime @default(now()) @db.Timestamptz(6)
+  atualizado_em DateTime @updatedAt @db.Timestamptz(6)
+  motivo_devolucao String? @db.Text
+
+  // Assinatura eletrônica
+  assinado_por_id     Int?
+  assinado_em         DateTime? @db.Timestamptz(6)
+  cargo_assinante     String?   @db.VarChar(150)
+  codigo_verificacao  String?   @unique @db.VarChar(32)
+  documento           Json?     // "fotografia" do documento assinado: reemitido sempre idêntico
+
+  // Anulação
+  anulado_por_id   Int?
+  anulado_em       DateTime? @db.Timestamptz(6)
+  motivo_anulacao  String?   @db.Text
+
+  origem_id    Int?     // gerado a partir de outro relatório ("gerar um novo")
+
+  unidade      unidades_organizacionais @relation(fields: [unidade_id], references: [id])
+  tecnico      usuarios                 @relation("ra_tecnico", fields: [tecnico_id], references: [id])
+  assinado_por usuarios?                @relation("ra_assinante", fields: [assinado_por_id], references: [id])
+  anulado_por  usuarios?                @relation("ra_anulador", fields: [anulado_por_id], references: [id])
+  itens        RelatorioAnaliticoItem[]
+
+  @@unique([unidade_id, ano, numero])
+  @@index([status])
+  @@map("relatorios_analiticos")
+}
+
+model RelatorioAnaliticoItem {
+  id           Int    @id @default(autoincrement())
+  relatorio_id Int
+  ordem        Int
+  equipamento  String @db.VarChar(200)
+  patrimonio   String @db.VarChar(60)
+
+  relatorio RelatorioAnalitico @relation(fields: [relatorio_id], references: [id], onDelete: Cascade)
+
+  @@index([relatorio_id])
+  @@index([patrimonio])
+  @@map("relatorios_analiticos_itens")
 }
